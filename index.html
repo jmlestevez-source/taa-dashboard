@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portfolio Performance Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%);
+        }
+        .card-hover:hover {
+            transform: translateY(-5px);
+            transition: transform 0.3s ease;
+        }
+        .ticker-tag {
+            transition: all 0.2s ease;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans">
+    <!-- Header -->
+    <header class="gradient-bg text-white shadow-lg">
+        <div class="container mx-auto px-4 py-6">
+            <div class="flex justify-between items-center">
+                <div class="flex items-center space-x-3">
+                    <i class="fas fa-chart-line text-3xl"></i>
+                    <h1 class="text-2xl font-bold">Portfolio Analyzer</h1>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button id="run-analysis" class="px-4 py-2 bg-green-500 hover:bg-green-600 rounded-lg transition">
+                        <i class="fas fa-play mr-2"></i>Analizar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="container mx-auto px-4 py-8">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Configuración -->
+            <div class="lg:col-span-1 space-y-6">
+                <div class="bg-white rounded-xl shadow-md p-6 card-hover">
+                    <h2 class="text-xl font-semibold mb-4"><i class="fas fa-wallet text-blue-500 mr-2"></i>Activos</h2>
+                    <div class="flex mb-4">
+                        <input type="text" id="ticker-input" placeholder="Ej: AAPL, TSLA, BTC-USD" 
+                               class="flex-1 px-3 py-2 border rounded-l-lg">
+                        <button id="add-tickers" class="px-4 py-2 bg-blue-500 text-white rounded-r-lg">
+                            <i class="fas fa-plus"></i>
+                        </button>
+                    </div>
+                    <div id="ticker-tags" class="flex flex-wrap gap-2 mb-4"></div>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block mb-2">Período</label>
+                            <select id="time-period" class="w-full p-2 border rounded-lg">
+                                <option value="1y">1 Año</option>
+                                <option value="3y">3 Años</option>
+                                <option value="5y" selected>5 Años</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block mb-2">Inversión Inicial ($)</label>
+                            <input type="number" id="initial-investment" value="10000" 
+                                   class="w-full p-2 border rounded-lg">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Resultados -->
+            <div class="lg:col-span-2 space-y-6">
+                <div class="bg-white rounded-xl shadow-md p-6 card-hover">
+                    <h2 class="text-xl font-semibold mb-4"><i class="fas fa-tachometer-alt text-red-500 mr-2"></i>Rendimiento</h2>
+                    <div id="loading" class="hidden text-center py-8">
+                        <div class="animate-spin text-4xl text-blue-500 mb-4">⌛</div>
+                        <p>Analizando portfolio...</p>
+                    </div>
+                    <div id="results">
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                            <div class="bg-blue-50 p-4 rounded-lg">
+                                <p class="text-sm text-blue-600">CAGR</p>
+                                <p class="text-2xl font-bold" id="cagr">-</p>
+                            </div>
+                            <div class="bg-green-50 p-4 rounded-lg">
+                                <p class="text-sm text-green-600">Retorno Total</p>
+                                <p class="text-2xl font-bold" id="return">-</p>
+                            </div>
+                            <div class="bg-purple-50 p-4 rounded-lg">
+                                <p class="text-sm text-purple-600">Volatilidad</p>
+                                <p class="text-2xl font-bold" id="volatility">-</p>
+                            </div>
+                            <div class="bg-yellow-50 p-4 rounded-lg">
+                                <p class="text-sm text-yellow-600">Máxima Caída</p>
+                                <p class="text-2xl font-bold" id="drawdown">-</p>
+                            </div>
+                        </div>
+                        <div class="h-96">
+                            <canvas id="chart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Configuración inicial
+        let chartInstance;
+        const cache = new Map();
+
+        // Validación de tickers
+        function isValidTicker(ticker) {
+            return /^[A-Za-z.:-]{1,10}$/.test(ticker);
+        }
+
+        // Manejo de tickers
+        document.getElementById('add-tickers').addEventListener('click', () => {
+            const input = document.getElementById('ticker-input').value;
+            const tickers = input.split(/[,;\s]+/).map(t => t.trim().toUpperCase()).filter(t => t);
+            
+            tickers.forEach(ticker => {
+                if (isValidTicker(ticker) && !document.getElementById(`tag-${ticker}`)) {
+                    const tag = document.createElement('div');
+                    tag.id = `tag-${ticker}`;
+                    tag.className = 'ticker-tag bg-gray-100 px-3 py-1 rounded-full flex items-center';
+                    tag.innerHTML = `
+                        ${ticker}
+                        <button onclick="document.getElementById('${tag.id}').remove()" 
+                                class="ml-2 text-gray-500 hover:text-red-500">
+                            ×
+                        </button>
+                    `;
+                    document.getElementById('ticker-tags').appendChild(tag);
+                }
+            });
+            document.getElementById('ticker-input').value = '';
+        });
+
+        // Fetch de datos con cache y proxy CORS
+        async function fetchData(ticker, interval, period) {
+            const cacheKey = `${ticker}-${interval}-${period}`;
+            if (cache.has(cacheKey)) return cache.get(cacheKey);
+
+            try {
+                const proxyUrl = 'https://api.allorigins.win/get?url=';
+                const url = encodeURIComponent(
+                    `https://query1.finance.yahoo.com/v8/finance/chart/${ticker}?interval=${interval}&range=${period}`
+                );
+                
+                const response = await axios.get(proxyUrl + url);
+                const data = JSON.parse(response.data.contents);
+                cache.set(cacheKey, data);
+                return data;
+            } catch (error) {
+                console.error(`Error fetching ${ticker}:`, error);
+                throw new Error(`No se pudo obtener datos para ${ticker}`);
+            }
+        }
+
+        // Cálculo principal
+        document.getElementById('run-analysis').addEventListener('click', async () => {
+            try {
+                // Mostrar loading
+                document.getElementById('loading').classList.remove('hidden');
+                document.getElementById('results').classList.add('hidden');
+
+                // Obtener parámetros
+                const tickers = Array.from(document.querySelectorAll('.ticker-tag'))
+                                   .map(tag => tag.firstChild.textContent.trim());
+                const period = document.getElementById('time-period').value;
+                const investment = parseFloat(document.getElementById('initial-investment').value);
+
+                if (tickers.length === 0) throw new Error('Agrega al menos un activo');
+                if (investment < 1000) throw new Error('Inversión mínima: $1000');
+
+                // Obtener datos históricos
+                const interval = period === '1y' ? '1wk' : '1mo';
+                const historical = {};
+                
+                for (const ticker of tickers) {
+                    const data = await fetchData(ticker, interval, period);
+                    if (!data?.chart?.result?.[0]) continue;
+                    
+                    const result = data.chart.result[0];
+                    historical[ticker] = {
+                        dates: result.timestamp.map(t => new Date(t * 1000)),
+                        prices: result.indicators.quote[0].close
+                    };
+                }
+
+                // Calcular rendimientos
+                const returns = {};
+                for (const [ticker, data] of Object.entries(historical)) {
+                    const returnsArray = [];
+                    for (let i = 1; i < data.prices.length; i++) {
+                        returnsArray.push((data.prices[i] - data.prices[i-1]) / data.prices[i-1]);
+                    }
+                    returns[ticker] = returnsArray;
+                }
+
+                // Calcular métricas
+                const portfolioReturns = Array(returns[tickers[0]].length).fill(0);
+                tickers.forEach(ticker => {
+                    returns[ticker].forEach((r, i) => portfolioReturns[i] += r / tickers.length);
+                });
+
+                const totalReturn = portfolioReturns.reduce((acc, r) => acc * (1 + r), 1);
+                const cagr = (Math.pow(totalReturn, 1/(period[0])) - 1;
+                const volatility = Math.sqrt(portfolioReturns.reduce((acc, r) => acc + Math.pow(r, 2), 0) / 
+                                 Math.sqrt(portfolioReturns.length) * Math.sqrt(252);
+
+                // Actualizar UI
+                document.getElementById('cagr').textContent = `${(cagr * 100).toFixed(2)}%`;
+                document.getElementById('return').textContent = `${((totalReturn - 1) * 100).toFixed(2)}%`;
+                document.getElementById('volatility').textContent = `${(volatility * 100).toFixed(2)}%`;
+                
+                // Mostrar resultados
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('results').classList.remove('hidden');
+                
+                // Actualizar gráfico
+                updateChart(historical[tickers[0]].dates, portfolioReturns);
+
+            } catch (error) {
+                alert(error.message);
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('results').classList.remove('hidden');
+            }
+        });
+
+        function updateChart(dates, returns) {
+            const ctx = document.getElementById('chart').getContext('2d');
+            if (chartInstance) chartInstance.destroy();
+
+            const cumulativeReturns = [10000];
+            returns.forEach(r => cumulativeReturns.push(cumulativeReturns[cumulativeReturns.length-1] * (1 + r)));
+
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: dates.map(d => d.toLocaleDateString()),
+                    datasets: [{
+                        label: 'Valor del Portfolio',
+                        data: cumulativeReturns,
+                        borderColor: '#3b82f6',
+                        fill: true,
+                        tension: 0.1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            ticks: {
+                                callback: value => `$${value.toLocaleString()}`
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
