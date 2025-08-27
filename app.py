@@ -1,9 +1,17 @@
 import streamlit as st
 import pandas as pd
-import yfinance as yf
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime
+
+# Manejo de errores para imports
+try:
+    import yfinance as yf
+except ImportError:
+    st.error("❌ Error: yfinance no está instalado correctamente. Por favor, verifica las dependencias.")
+    st.stop()
+
+# Resto de tu código...
 
 # Configuración de la página
 st.set_page_config(
