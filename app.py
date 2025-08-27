@@ -1,46 +1,35 @@
 import streamlit as st
 
-st.title("🔧 TAA Dashboard - Instalador")
-st.info("🚀 Instalando dependencias...")
+st.title("🎯 TAA Dashboard")
+st.success("🎉 ¡La aplicación está funcionando!")
 
-# Función para instalar paquetes
-def install_package(package):
+st.markdown("""
+### Próximos pasos:
+1. Esta es una versión de prueba para confirmar que Streamlit funciona
+2. Ahora podemos añadir las dependencias una por una
+3. Haz clic abajo para comenzar la instalación
+""")
+
+if st.button("🚀 Instalar dependencias"):
+    st.info("Instalando paquetes...")
+    
     import subprocess
     import sys
-    try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", package])
-        return True
-    except Exception as e:
-        st.error(f"Error instalando {package}: {str(e)}")
-        return False
-
-# Lista de paquetes necesarios
-packages = [
-    "yfinance==0.2.41",
-    "pandas==2.2.2", 
-    "numpy==1.26.4",
-    "plotly==5.24.1"
-]
-
-# Instalar paquetes uno por uno
-for package in packages:
-    with st.spinner(f"Instalando {package}..."):
-        if install_package(package):
-            st.success(f"✅ {package} instalado correctamente")
-        else:
-            st.error(f"❌ Error instalando {package}")
-
-st.divider()
-st.success("🎉 ¡Instalación completada!")
-st.info("Ahora puedes reemplazar este código con tu aplicación real")
-
-# Test final
-try:
-    import yfinance as yf
-    import pandas as pd
-    import numpy as np
-    import plotly.graph_objects as go
-    st.success("✅ Todas las dependencias funcionan correctamente")
+    
+    packages = [
+        "yfinance==0.2.41",
+        "pandas==2.2.2", 
+        "numpy==1.26.4",
+        "plotly==5.24.1"
+    ]
+    
+    for package in packages:
+        try:
+            subprocess.run([sys.executable, "-m", "pip", "install", package], 
+                         check=True, capture_output=True)
+            st.success(f"✅ {package}")
+        except Exception as e:
+            st.error(f"❌ {package}: {str(e)}")
+    
     st.balloons()
-except Exception as e:
-    st.error(f"❌ Aún hay errores: {str(e)}")
+    st.success("¡Instalación completada! Ahora puedes usar la app completa.")
