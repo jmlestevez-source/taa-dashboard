@@ -7,9 +7,6 @@ import yfinance as yf
 import time
 import random
 
-# Configurar yfinance con mejores opciones
-yf.set_tz_cache_limit(3600)  # Cache de 1 hora
-
 # Configuración de la página
 st.set_page_config(
     page_title="🎯 TAA Dashboard", 
