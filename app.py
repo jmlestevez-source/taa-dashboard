@@ -132,9 +132,17 @@ def clean_and_align_data(data_dict):
         st.error("❌ No hay datos para procesar")
         return None
     try:
-        close_data = {t: df["Close"] for t, df in data_dict.items() if "Close" in df.columns}
-        df = pd.DataFrame(close_data).dropna(axis=1, how='all').ffill().bfill().dropna(how='all')
-        return df if not df.empty else None
+        # Crear dict de Series con índice explícito
+        close_data = {t: df["Close"].dropna() for t, df in data_dict.items() if "Close" in df.columns}
+        if not close_data:
+            st.error("❌ No se pudieron extraer precios de cierre")
+            return None
+        df = pd.DataFrame(close_data)
+        if df.empty:
+            st.error("❌ DataFrame vacío")
+            return None
+        df = df.ffill().bfill().dropna(how='all')
+        return df
     except Exception as e:
         st.error(f"❌ Error procesando datos: {str(e)}")
         return None
