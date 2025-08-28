@@ -5,7 +5,6 @@ import plotly.graph_objects as go
 from datetime import datetime
 import yfinance as yf
 import time
-import random
 
 # Configuración de la página
 st.set_page_config(
@@ -94,54 +93,100 @@ def calculate_metrics(returns, initial_capital):
         "Sharpe Ratio": round(sharpe, 2)
     }
 
-def download_data_enhanced(tickers, start_date, end_date):
-    """Descarga datos con configuración mejorada"""
+def download_data_robust(tickers, start_date, end_date):
+    """Descarga datos con enfoque robusto"""
     try:
-        # Configuración mejorada de yfinance
-        yf.pdr_override()
+        st.info("📥 Intentando descarga masiva...")
         
-        # Intentar con diferentes configuraciones
-        configs = [
-            {"group_by": 'ticker', "auto_adjust": True},
-            {"group_by": 'ticker', "auto_adjust": False},
-            {"group_by": 'column'},
-            {}  # Configuración por defecto
-        ]
+        # Intento 1: Descarga masiva estándar
+        data = yf.download(
+            tickers, 
+            start=start_date, 
+            end=end_date,
+            progress=False,
+            group_by='ticker'
+        )
         
-        for i, config in enumerate(configs):
-            try:
-                with st.spinner(f"📥 Intentando configuración {i+1}/4..."):
-                    data = yf.download(
-                        tickers, 
-                        start=start_date, 
-                        end=end_date,
-                        progress=False,
-                        **config
-                    )
+        if not data.empty:
+            # Manejar formato MultiIndex
+            if isinstance(data.columns, pd.MultiIndex):
+                # Extraer solo 'Adj Close'
+                adj_close_data = {}
+                for ticker in tickers:
+                    if ticker in data.columns.levels[0]:
+                        adj_close_data[ticker] = data[ticker]['Adj Close']
+                return pd.DataFrame(adj_close_data)
+            else:
+                # Formato simple
+                if 'Adj Close' in data.columns:
+                    return data['Adj Close']
+                else:
+                    return data
                     
-                    if not data.empty:
-                        # Manejar diferentes formatos de datos
-                        if isinstance(data, pd.DataFrame):
-                            if 'Adj Close' in data.columns:
-                                return data['Adj Close']
-                            elif len(data.columns) > 0:
-                                # Si hay múltiples columnas, asumir que es multiindex
-                                if isinstance(data.columns, pd.MultiIndex):
-                                    return data['Adj Close']
-                                else:
-                                    return data
-                        else:
-                            return data
-                            
-            except Exception as e:
-                st.warning(f"Configuración {i+1} falló: {str(e)[:50]}...")
-                time.sleep(1)  # Pequeña pausa entre intentos
-                
-        return None
-        
     except Exception as e:
-        st.error(f"Error general en descarga: {str(e)}")
+        st.warning(f"Descarga masiva falló: {str(e)[:100]}")
+    
+    # Si falla, intentar descarga individual
+    st.info("🔄 Intentando descarga individual...")
+    return download_individual_tickers(tickers, start_date, end_date)
+
+def download_individual_tickers(tickers, start_date, end_date):
+    """Descarga tickers individualmente"""
+    individual_data = {}
+    failed_tickers = []
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i, ticker in enumerate(tickers):
+        try:
+            status_text.text(f"📥 Descargando {ticker} ({i+1}/{len(tickers)})")
+            ticker_data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+            
+            if not ticker_data.empty:
+                if 'Adj Close' in ticker_data.columns:
+                    individual_data[ticker] = ticker_data['Adj Close']
+                else:
+                    # Usar 'Close' si 'Adj Close' no está disponible
+                    individual_data[ticker] = ticker_data['Close']
+            else:
+                failed_tickers.append(ticker)
+                
+        except Exception as e:
+            st.warning(f"❌ {ticker} falló: {str(e)[:50]}")
+            failed_tickers.append(ticker)
+        
+        # Pequeña pausa para evitar problemas de rate limiting
+        time.sleep(0.1)
+        progress_bar.progress((i + 1) / len(tickers))
+    
+    progress_bar.empty()
+    status_text.empty()
+    
+    if individual_data:
+        df = pd.DataFrame(individual_data)
+        st.success(f"✅ Descargados {len(individual_data)} tickers individualmente")
+        if failed_tickers:
+            st.warning(f"⚠️ No se pudieron descargar: {', '.join(failed_tickers)}")
+        return df
+    else:
         return None
+
+def clean_data(df):
+    """Limpia y prepara los datos"""
+    if df is None or df.empty:
+        return None
+    
+    # Eliminar columnas completamente vacías
+    df = df.dropna(axis=1, how='all')
+    
+    # Rellenar valores faltantes
+    df = df.fillna(method='ffill').fillna(method='bfill')
+    
+    # Eliminar filas completamente vacías
+    df = df.dropna(how='all')
+    
+    return df
 
 def run_daa_keller(initial_capital, start_date, end_date, benchmark):
     """Ejecuta la estrategia DAA KELLER"""
@@ -153,50 +198,21 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
     
     st.info(f"📊 Descargando datos para {len(ALL_TICKERS)} tickers: {', '.join(ALL_TICKERS)}")
     
-    # Descargar datos con configuración mejorada
-    df = download_data_enhanced(ALL_TICKERS, start_date, end_date)
+    # Descargar datos con enfoque robusto
+    df = download_data_robust(ALL_TICKERS, start_date, end_date)
     
     if df is None or df.empty:
         st.error("❌ No se pudieron obtener datos históricos")
-        st.info("💡 Probando descarga individual de tickers...")
-        
-        # Intentar descargar tickers individualmente
-        individual_data = {}
-        failed_tickers = []
-        
-        for ticker in ALL_TICKERS:
-            try:
-                with st.spinner(f"📥 Descargando {ticker}..."):
-                    ticker_data = yf.download(ticker, start=start_date, end=end_date, progress=False)
-                    if not ticker_data.empty and 'Adj Close' in ticker_data.columns:
-                        individual_data[ticker] = ticker_data['Adj Close']
-                    else:
-                        failed_tickers.append(ticker)
-                    time.sleep(0.1)  # Pequeña pausa
-            except Exception as e:
-                st.warning(f"❌ {ticker}: {str(e)[:50]}...")
-                failed_tickers.append(ticker)
-        
-        if individual_data:
-            df = pd.DataFrame(individual_data)
-            st.success(f"✅ Descargados {len(individual_data)} tickers individualmente")
-            if failed_tickers:
-                st.warning(f"⚠️ No se pudieron descargar: {', '.join(failed_tickers)}")
-        else:
-            st.error("❌ No se pudo descargar ningún ticker")
-            return None
-    
-    # Limpiar datos
-    if df is not None and not df.empty:
-        df = df.dropna(axis=1, how='all')  # Eliminar columnas completamente vacías
-        df = df.fillna(method='ffill').fillna(method='bfill')  # Rellenar valores faltantes
-        df.dropna(inplace=True)
-    
-    if df is None or df.empty:
-        st.error("No se pudieron obtener datos históricos válidos")
         return None
     
-    st.success(f"✅ Datos descargados: {len(df.columns)} tickers, {len(df)} registros")
+    # Limpiar datos
+    df = clean_data(df)
+    
+    if df is None or df.empty:
+        st.error("❌ No se pudieron limpiar los datos históricos")
+        return None
+    
+    st.success(f"✅ Datos descargados y limpiados: {len(df.columns)} tickers, {len(df)} registros")
     
     # Resamplear a mensual
     monthly = df.resample('M').last()
@@ -217,32 +233,70 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
     for i in range(1, len(monthly)):
         prev_month = monthly.iloc[i - 1]
         
-        # Calcular momentum scores
-        canary_scores = {symbol: momentum_score(monthly.iloc[:i], symbol) for symbol in CANARY}
-        risky_scores = {symbol: momentum_score(monthly.iloc[:i], symbol) for symbol in RISKY}
-        protective_scores = {symbol: momentum_score(monthly.iloc[:i], symbol) for symbol in PROTECTIVE}
+        # Verificar que todos los tickers necesarios tengan datos
+        required_tickers = set(RISKY + PROTECTIVE + CANARY)
+        available_tickers = set(monthly.columns)
+        missing_tickers = required_tickers - available_tickers
+        
+        if missing_tickers:
+            st.warning(f"Faltan tickers en el mes {i}: {missing_tickers}")
+            # Continuar con los tickers disponibles
+        
+        # Calcular momentum scores solo para tickers disponibles
+        canary_scores = {}
+        risky_scores = {}
+        protective_scores = {}
+        
+        for symbol in CANARY:
+            if symbol in monthly.columns:
+                try:
+                    canary_scores[symbol] = momentum_score(monthly.iloc[:i], symbol)
+                except:
+                    canary_scores[symbol] = 0
+        
+        for symbol in RISKY:
+            if symbol in monthly.columns:
+                try:
+                    risky_scores[symbol] = momentum_score(monthly.iloc[:i], symbol)
+                except:
+                    risky_scores[symbol] = 0
+        
+        for symbol in PROTECTIVE:
+            if symbol in monthly.columns:
+                try:
+                    protective_scores[symbol] = momentum_score(monthly.iloc[:i], symbol)
+                except:
+                    protective_scores[symbol] = 0
         
         # Determinar asignación
         n = sum(1 for s in canary_scores.values() if s <= 0)
         
-        if n == 2:
+        if n == 2 and protective_scores:
             top_protective = max(protective_scores, key=protective_scores.get)
             weights = {top_protective: 1.0}
-        elif n == 1:
+        elif n == 1 and protective_scores and risky_scores:
             top_protective = max(protective_scores, key=protective_scores.get)
             top_risky = sorted(risky_scores, key=risky_scores.get, reverse=True)[:6]
             weights = {top_protective: 0.5}
             for r in top_risky:
                 weights[r] = 0.5 / 6
-        else:
+        elif risky_scores:
             top_risky = sorted(risky_scores, key=risky_scores.get, reverse=True)[:6]
             weights = {r: 1.0 / 6 for r in top_risky}
+        else:
+            # Fallback: mantener posición anterior o cash
+            weights = {}
         
         # Calcular retorno mensual
-        monthly_return = sum(
-            weights.get(ticker, 0) * (monthly.iloc[i][ticker] / prev_month[ticker] - 1) 
-            for ticker in weights
-        )
+        monthly_return = 0
+        for ticker, weight in weights.items():
+            if ticker in monthly.columns and ticker in prev_month.index:
+                try:
+                    price_ratio = monthly.iloc[i][ticker] / prev_month[ticker]
+                    monthly_return += weight * (price_ratio - 1)
+                except:
+                    pass  # Ignorar tickers con problemas
+        
         equity_curve.iloc[i] = equity_curve.iloc[i - 1] * (1 + monthly_return)
         
         # Actualizar progreso
@@ -254,11 +308,13 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
     status_text.empty()
     
     # Calcular benchmark
-    benchmark_data = df[benchmark].resample('M').last()
-    benchmark_equity = benchmark_data / benchmark_data.iloc[0] * initial_capital
-    
-    # Alinear fechas
-    benchmark_equity = benchmark_equity.reindex(equity_curve.index, method='ffill')
+    if benchmark in df.columns:
+        benchmark_data = df[benchmark].resample('M').last()
+        benchmark_equity = benchmark_data / benchmark_data.iloc[0] * initial_capital
+        # Alinear fechas
+        benchmark_equity = benchmark_equity.reindex(equity_curve.index, method='ffill')
+    else:
+        benchmark_equity = pd.Series(initial_capital, index=equity_curve.index)
     
     # Calcular retornos
     portfolio_returns = equity_curve.pct_change().dropna()
