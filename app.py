@@ -9,24 +9,8 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
 import random
-import os, pickle
-
-CACHE_DIR = ".cache"
-os.makedirs(CACHE_DIR, exist_ok=True)
-
-def cached_download(tickers, start, end):
-    key = f"{sorted(tickers)}_{start}_{end}"
-    cache_path = os.path.join(CACHE_DIR, f"{hash(key)}.pkl")
-
-    if os.path.exists(cache_path):
-        st.info("📂 Cargando datos desde caché…")
-        with open(cache_path, "rb") as f:
-            return pickle.load(f)
-
-    data = download_all_tickers_conservative(tickers, start, end)
-    with open(cache_path, "wb") as f:
-        pickle.dump(data, f)
-    return data
+import os
+import pickle
 
 # 🔧 Configuración de la página
 st.set_page_config(
@@ -63,6 +47,23 @@ PROTECTIVE = [x.strip() for x in protective_assets.split(',') if x.strip()]
 CANARY = [x.strip() for x in canary_assets.split(',') if x.strip()]
 benchmark = st.sidebar.selectbox("📈 Benchmark", ["SPY", "QQQ", "IWM"], index=0)
 
+# === CACHÉ LOCAL ===
+CACHE_DIR = ".cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+def cached_download(tickers, start, end):
+    key = f"{sorted(tickers)}_{start}_{end}"
+    cache_path = os.path.join(CACHE_DIR, f"{hash(key)}.pkl")
+    if os.path.exists(cache_path):
+        st.info("📂 Cargando datos desde caché…")
+        with open(cache_path, "rb") as f:
+            return pickle.load(f)
+
+    data = download_all_tickers_conservative(tickers, start, end)
+    with open(cache_path, "wb") as f:
+        pickle.dump(data, f)
+    return data
+
 # === SESIÓN ROBUSTA ===
 def create_robust_session():
     user_agents = [
@@ -83,38 +84,35 @@ def create_robust_session():
     session.mount("http://", adapter)
     return session
 
-# === DESCARGA MEJORADA ===
+# === DESCARGA ÚNICA Y CACHÉ ===
 def download_all_tickers_conservative(tickers, start, end):
     st.info(f"📊 Descargando {len(tickers)} tickers entre {start} y {end}…")
-    import yfinance as yf
-
-    # 1) Descarga todo en un solo request (evita 429)
+    session = create_robust_session()
+    yf.utils.session = session
     data = yf.download(
         tickers=tickers,
         start=start,
         end=end,
         interval="1mo",
         auto_adjust=True,
-        threads=False,        # Yahoo bloquea hilos
+        threads=False,
         progress=False,
         timeout=30
     )
 
-    # 2) Re-ordenar a dict {ticker: DataFrame}
     data_dict = {}
     if isinstance(data.columns, pd.MultiIndex):
-        # Caso múltiples tickers
         for t in tickers:
             if ("Close", t) in data.columns:
                 df = data.xs(t, level=1, axis=1).dropna()
                 data_dict[t] = df
     else:
-        # Caso 1 solo ticker
         if "Close" in data.columns:
             data_dict[tickers[0]] = data
 
     st.success(f"✅ Descargados {len(data_dict)} tickers")
     return data_dict
+
 # === UTILS ===
 def clean_and_align_data(data_dict):
     if not data_dict:
@@ -122,7 +120,7 @@ def clean_and_align_data(data_dict):
         return None
     try:
         close_data = {t: df["Close"] for t, df in data_dict.items() if "Close" in df.columns}
-        df = df.dropna(axis=1, how='all').ffill().bfill().dropna(how='all')
+        df = pd.DataFrame(close_data).dropna(axis=1, how='all').ffill().bfill().dropna(how='all')
         return df if not df.empty else None
     except Exception as e:
         st.error(f"❌ Error procesando datos: {str(e)}")
@@ -204,9 +202,8 @@ def run_daa_keller(initial_capital, benchmark, start, end):
         for ticker, weight in weights.items():
             if ticker in df.columns and ticker in prev_month.index:
                 try:
-                    price_ratio = df.iloc[i][ticker] / prev_month[ticker]
-                    monthly_return += (weight / 100) * (price_ratio - 1)
-                except:
+                    monthly_return += (weight / 100) * (df.iloc[i][ticker] / prev_month[ticker] - 1)
+                except Exception:
                     pass
         equity_curve.iloc[i] = equity_curve.iloc[i - 1] * (1 + monthly_return)
         progress_bar.progress(int((i / total_months) * 100))
@@ -262,16 +259,15 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
 
                 # === SEÑALES ===
                 st.subheader("📈 Señales de asignación")
-                today_df = download_all_tickers_conservative(list(set(RISKY + PROTECTIVE + CANARY)), datetime.today() - pd.DateOffset(months=13), datetime.today()
-)
-
-                
+                today_df = cached_download(
+                    list(set(RISKY + PROTECTIVE + CANARY)),
+                    datetime.today() - pd.DateOffset(months=13),
+                    datetime.today()
+                )
                 if today_df:
                     today_df = clean_and_align_data(today_df)
                     if today_df is not None and not today_df.empty:
-                        # Señal en tiempo real
                         weights_now = compute_weights(today_df, CANARY, RISKY, PROTECTIVE)
-                        # Señal del último mes cerrado
                         weights_last = compute_weights(today_df.iloc[:-1], CANARY, RISKY, PROTECTIVE)
 
                         col_now, col_last = st.columns(2)
