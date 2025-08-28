@@ -164,7 +164,7 @@ def clean_and_align_data(data_dict):
                     close_data[ticker] = df.iloc[:, 0]  # Fallback
                     st.warning(f"⚠️ Usando primera columna para {ticker}")
         
-        if not close_
+        if not close_:
             st.error("❌ No se pudieron extraer precios de cierre")
             return None
         
