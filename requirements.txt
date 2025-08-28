@@ -3,3 +3,4 @@ yfinance==0.2.41
 pandas==2.2.2
 numpy==1.26.4
 plotly==5.24.1
+requests-cache==1.2.1
