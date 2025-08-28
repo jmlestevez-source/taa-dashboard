@@ -194,11 +194,15 @@ def run_daa_keller(initial_capital, benchmark, start, end):
     equity_curve = pd.Series(index=df.index, dtype=float)
     equity_curve.iloc[0] = initial_capital
 
+    # Nueva lista para almacenar las señales
+    signals_history = []
+
     progress_bar = st.progress(0)
     total_months = len(df) - 1
 
     for i in range(1, len(df)):
         prev_month = df.iloc[i - 1]
+        current_date = df.index[i] # Fecha de rebalanceo
         canary_scores = {s: momentum_score(df.iloc[:i], s) for s in CANARY if s in df.columns}
         risky_scores = {s: momentum_score(df.iloc[:i], s) for s in RISKY if s in df.columns}
         protective_scores = {s: momentum_score(df.iloc[:i], s) for s in PROTECTIVE if s in df.columns}
@@ -219,6 +223,12 @@ def run_daa_keller(initial_capital, benchmark, start, end):
             weights = {r: 1.0 / 6 for r in top_r}
         else:
             weights = {}
+
+        # Guardar las señales para este mes
+        signals_history.append({
+            'date': current_date,
+            'weights': weights.copy()
+        })
 
         monthly_return = 0
         for ticker, weight in weights.items():
@@ -253,8 +263,50 @@ def run_daa_keller(initial_capital, benchmark, start, end):
         "portfolio_metrics": portfolio_metrics,
         "benchmark_metrics": benchmark_metrics,
         "portfolio_drawdown": portfolio_drawdown,
-        "benchmark_drawdown": benchmark_drawdown
+        "benchmark_drawdown": benchmark_drawdown,
+        "signals_history": signals_history # Devolver el historial de señales
     }
+
+# === NUEVA FUNCIÓN: Obtener señales actuales ===
+def get_current_signals():
+    ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY))
+    # Descargar datos hasta hoy para calcular las señales actuales
+    end_date_today = datetime.today()
+    start_date_for_signals = datetime(end_date_today.year - 2, end_date_today.month, 1) # 2 años atrás
+    
+    st.info("🔄 Obteniendo señales actuales...")
+    data_dict = download_all_tickers_conservative(ALL_TICKERS, start_date_for_signals, end_date_today)
+    if not data_dict:
+        st.error("No se pudieron obtener datos para las señales actuales")
+        return None
+    df = clean_and_align_data(data_dict)
+    if df is None or df.empty:
+        st.error("No se pudieron procesar los datos para las señales actuales")
+        return None
+
+    # Usar todos los datos disponibles para calcular las puntuaciones actuales
+    canary_scores = {s: momentum_score(df, s) for s in CANARY if s in df.columns}
+    risky_scores = {s: momentum_score(df, s) for s in RISKY if s in df.columns}
+    protective_scores = {s: momentum_score(df, s) for s in PROTECTIVE if s in df.columns}
+
+    n = sum(1 for s in canary_scores.values() if s <= 0)
+
+    if n == 2 and protective_scores:
+        top = max(protective_scores, key=protective_scores.get)
+        weights = {top: 1.0}
+    elif n == 1 and protective_scores and risky_scores:
+        top_p = max(protective_scores, key=protective_scores.get)
+        top_r = sorted(risky_scores, key=risky_scores.get, reverse=True)[:6]
+        weights = {top_p: 0.5}
+        for r in top_r:
+            weights[r] = 0.5 / 6
+    elif risky_scores:
+        top_r = sorted(risky_scores, key=risky_scores.get, reverse=True)[:6]
+        weights = {r: 1.0 / 6 for r in top_r}
+    else:
+        weights = {}
+
+    return weights
 
 # === BOTÓN EJECUTAR ===
 if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
@@ -289,5 +341,34 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
                 dd.add_trace(go.Scatter(x=result["dates"], y=result["benchmark_drawdown"], fill='tozeroy', name=f"{benchmark} Drawdown", line=dict(color="blue")))
                 dd.update_layout(height=400, xaxis_title="Fecha", yaxis_title="Drawdown (%)")
                 st.plotly_chart(dd, use_container_width=True)
+
+                # === NUEVA SECCIÓN: Mostrar señales ===
+                st.subheader("📡 Señales de Inversión")
+
+                # 1. Señales del cierre del mes anterior
+                if result['signals_history']:
+                    last_signal_date = result['signals_history'][-1]['date']
+                    last_weights = result['signals_history'][-1]['weights']
+                    
+                    st.markdown(f"**🗓️ Cierre del mes anterior ({last_signal_date.strftime('%Y-%m-%d')}):**")
+                    if last_weights:
+                        weights_df = pd.DataFrame.from_dict(last_weights, orient='index', columns=['Peso (%)'])
+                        weights_df['Peso (%)'] = (weights_df['Peso (%)'] * 100).round(2)
+                        weights_df.index.name = 'ETF'
+                        st.dataframe(weights_df)
+                    else:
+                        st.write("No hay asignación de pesos para esta fecha.")
+
+                # 2. Señales actuales (hoy)
+                current_weights = get_current_signals()
+                st.markdown(f"**📅 Fecha actual ({datetime.today().strftime('%Y-%m-%d')}):**")
+                if current_weights:
+                    current_weights_df = pd.DataFrame.from_dict(current_weights, orient='index', columns=['Peso (%)'])
+                    current_weights_df['Peso (%)'] = (current_weights_df['Peso (%)'] * 100).round(2)
+                    current_weights_df.index.name = 'ETF'
+                    st.dataframe(current_weights_df)
+                else:
+                    st.write("No se pudieron calcular las señales actuales.")
+
 else:
     st.info("👈 Configura los parámetros y ejecuta el análisis")
