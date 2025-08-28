@@ -6,11 +6,6 @@ from datetime import datetime
 import yfinance as yf
 import time
 import random
-import logging
-
-# Configurar logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # 🔧 Configuración de la página (DEBE ser lo primero)
 st.set_page_config(
@@ -18,14 +13,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# 🔧 Configurar yfinance con mejor enfoque
-try:
-    # Configurar yfinance para mejor rendimiento
-    yf.set_tz_cache_limit(3600)  # Cache de 1 hora
-    st.success("✅ yfinance configurado correctamente")
-except:
-    pass
 
 # Título y descripción
 st.title("🎯 Tactical Asset Allocation Dashboard")
@@ -90,11 +77,11 @@ benchmark = st.sidebar.selectbox(
     index=0
 )
 
-# Función mejorada para descargar datos (basada en el código que funciona)
-def download_data_optimized(tickers: list, period: str = "10y") -> dict:
-    """Descarga datos optimizada basada en el ejemplo que funciona"""
+# Función para descargar datos (ya funciona bien)
+def download_all_tickers_conservative(tickers):
+    """Descarga todos los tickers con enfoque conservador"""
     st.info(f"📊 Descargando datos para {len(tickers)} tickers...")
-    data = {}
+    data_dict = {}
     errors = []
     
     progress_bar = st.progress(0)
@@ -104,21 +91,21 @@ def download_data_optimized(tickers: list, period: str = "10y") -> dict:
         try:
             status_text.text(f"📥 Descargando {ticker} ({i+1}/{len(tickers)})")
             
-            # Usar el enfoque que funciona: period + interval mensual
-            df = yf.download(
-                ticker, 
-                period=period, 
-                interval="1mo", 
-                auto_adjust=True, 
+            # Usar enfoque que funciona
+            data = yf.download(
+                ticker,
+                period="10y",
+                interval="1mo",
+                auto_adjust=True,
                 progress=False,
                 group_by='ticker'
             )
             
-            if df is not None and not df.empty:
+            if data is not None and not data.empty:
                 # Asegurarse de que el índice es de tipo datetime y ordenarlo
-                df.index = pd.to_datetime(df.index)
-                df.sort_index(inplace=True)
-                data[ticker] = df
+                data.index = pd.to_datetime(data.index)
+                data.sort_index(inplace=True)
+                data_dict[ticker] = data
                 st.success(f"✅ {ticker} descargado")
             else:
                 st.warning(f"⚠️ No se obtuvieron datos para {ticker}")
@@ -128,8 +115,8 @@ def download_data_optimized(tickers: list, period: str = "10y") -> dict:
             st.error(f"❌ Error al descargar {ticker}: {str(e)[:50]}")
             errors.append(ticker)
         
-        # Pequeña pausa para no saturar la API
-        time.sleep(random.uniform(0.1, 0.3))
+        # Pequeña pausa entre tickers
+        time.sleep(random.uniform(0.5, 1.5))
         progress_bar.progress((i + 1) / len(tickers))
     
     progress_bar.empty()
@@ -138,8 +125,59 @@ def download_data_optimized(tickers: list, period: str = "10y") -> dict:
     if errors:
         st.warning(f"⚠️ Errores en: {', '.join(errors)}")
     
-    st.success(f"✅ Descarga completada: {len(data)} exitosos, {len(errors)} errores")
-    return data
+    st.success(f"✅ Descarga completada: {len(data_dict)} exitosos, {len(errors)} errores")
+    return data_dict
+
+def clean_and_align_data(data_dict):
+    """Convierte dict de datos a DataFrame alineado"""
+    if not data_dict:
+        st.error("❌ No hay datos para procesar")
+        return None
+    
+    try:
+        # Extraer solo 'Close' prices
+        close_data = {}
+        for ticker, df in data_dict.items():
+            if 'Close' in df.columns:
+                close_data[ticker] = df['Close']
+            else:
+                # Si hay múltiples columnas, buscar 'Close'
+                st.warning(f"🔍 Buscando 'Close' en {ticker}: columnas disponibles {list(df.columns)}")
+                close_data[ticker] = df.iloc[:, 0]  # Primer columna como fallback
+        
+        if not close_data:
+            st.error("❌ No se pudieron extraer precios de cierre")
+            return None
+        
+        # Crear DataFrame
+        df = pd.DataFrame(close_data)
+        
+        # Verificar que tenemos datos
+        if df.empty:
+            st.error("❌ DataFrame resultante está vacío")
+            return None
+            
+        st.info(f"📊 Datos brutos: {len(df)} filas, {len(df.columns)} columnas")
+        
+        # Eliminar columnas completamente vacías
+        df = df.dropna(axis=1, how='all')
+        
+        # Rellenar valores faltantes hacia adelante y hacia atrás
+        df = df.fillna(method='ffill').fillna(method='bfill')
+        
+        # Eliminar filas completamente vacías
+        df = df.dropna(how='all')
+        
+        if df.empty:
+            st.error("❌ DataFrame limpio está vacío después de procesamiento")
+            return None
+            
+        st.success(f"✅ Datos procesados: {len(df)} filas, {len(df.columns)} columnas")
+        return df
+        
+    except Exception as e:
+        st.error(f"❌ Error en procesamiento de datos: {str(e)}")
+        return None
 
 def momentum_score(df, symbol):
     """Calcula el momentum score para un símbolo"""
@@ -154,8 +192,10 @@ def momentum_score(df, symbol):
         p12 = float(df[symbol].iloc[-13] if len(df) >= 13 else df[symbol].iloc[0]) # 12 meses atrás
         
         # Fórmula de momentum de Keller adaptada para datos mensuales
-        return (12 * (p0 / p1)) + (4 * (p0 / p3)) + (2 * (p0 / p6)) + (p0 / p12) - 19
-    except:
+        score = (12 * (p0 / p1)) + (4 * (p0 / p3)) + (2 * (p0 / p6)) + (p0 / p12) - 19
+        return score
+    except Exception as e:
+        st.warning(f"⚠️ Error calculando momentum para {symbol}: {str(e)[:50]}")
         return 0
 
 def calculate_metrics(returns, initial_capital):
@@ -198,40 +238,12 @@ def calculate_drawdown_series(equity_series):
     drawdown = (equity_series - running_max) / running_max * 100
     return drawdown
 
-def clean_and_align_data(data_dict):
-    """Convierte dict de datos a DataFrame alineado"""
-    if not data_dict:
-        return None
-    
-    # Extraer solo 'Close' prices
-    close_data = {}
-    for ticker, df in data_dict.items():
-        if 'Close' in df.columns:
-            close_data[ticker] = df['Close']
-    
-    if not close_data:
-        return None
-    
-    # Crear DataFrame
-    df = pd.DataFrame(close_data)
-    
-    # Eliminar columnas completamente vacías
-    df = df.dropna(axis=1, how='all')
-    
-    # Rellenar valores faltantes hacia adelante y hacia atrás
-    df = df.fillna(method='ffill').fillna(method='bfill')
-    
-    # Eliminar filas completamente vacías
-    df = df.dropna(how='all')
-    
-    return df
-
 def run_daa_keller(initial_capital, benchmark):
-    """Ejecuta la estrategia DAA KELLER con enfoque optimizado"""
+    """Ejecuta la estrategia DAA KELLER"""
     ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
     
-    # Descargar datos con enfoque optimizado (10 años de datos mensuales)
-    data_dict = download_data_optimized(ALL_TICKERS, period="10y")
+    # Descargar datos
+    data_dict = download_all_tickers_conservative(ALL_TICKERS)
     
     if not data_dict:
         st.error("❌ No se pudieron obtener datos históricos")
@@ -246,6 +258,14 @@ def run_daa_keller(initial_capital, benchmark):
     
     st.success(f"✅ Datos procesados: {len(df.columns)} tickers, {len(df)} meses")
     
+    # Verificar que tenemos todos los tickers necesarios
+    required_tickers = set(ALL_TICKERS)
+    available_tickers = set(df.columns)
+    missing_tickers = required_tickers - available_tickers
+    
+    if missing_tickers:
+        st.warning(f"⚠️ Tickers faltantes: {', '.join(missing_tickers)}")
+    
     # Inicializar equity curve
     equity_curve = pd.Series(index=df.index, dtype=float)
     equity_curve.iloc[0] = initial_capital
@@ -256,6 +276,8 @@ def run_daa_keller(initial_capital, benchmark):
     
     # Ejecutar estrategia mes a mes
     total_months = len(df) - 1
+    st.info(f"📊 Ejecutando estrategia para {total_months} meses...")
+    
     for i in range(1, len(df)):
         prev_month = df.iloc[i - 1]
         
@@ -268,21 +290,24 @@ def run_daa_keller(initial_capital, benchmark):
             if symbol in df.columns:
                 try:
                     canary_scores[symbol] = momentum_score(df.iloc[:i], symbol)
-                except:
+                except Exception as e:
+                    st.warning(f"⚠️ Error en canary {symbol}: {str(e)[:30]}")
                     canary_scores[symbol] = 0
         
         for symbol in RISKY:
             if symbol in df.columns:
                 try:
                     risky_scores[symbol] = momentum_score(df.iloc[:i], symbol)
-                except:
+                except Exception as e:
+                    st.warning(f"⚠️ Error en risky {symbol}: {str(e)[:30]}")
                     risky_scores[symbol] = 0
         
         for symbol in PROTECTIVE:
             if symbol in df.columns:
                 try:
                     protective_scores[symbol] = momentum_score(df.iloc[:i], symbol)
-                except:
+                except Exception as e:
+                    st.warning(f"⚠️ Error en protective {symbol}: {str(e)[:30]}")
                     protective_scores[symbol] = 0
         
         # Determinar asignación
@@ -301,25 +326,36 @@ def run_daa_keller(initial_capital, benchmark):
             top_risky = sorted(risky_scores, key=risky_scores.get, reverse=True)[:6]
             weights = {r: 1.0 / 6 for r in top_risky}
         else:
-            # Fallback: mantener posición anterior
+            # Fallback: mantener posición anterior o cash
             weights = {}
+            if i > 1:
+                # Mantener pesos anteriores
+                pass
+            else:
+                # Primera iteración, asignar igualitario a riesgosos
+                if RISKY:
+                    available_risky = [r for r in RISKY if r in df.columns]
+                    if available_risky:
+                        weights = {r: 1.0 / len(available_risky) for r in available_risky[:6]}
         
         # Calcular retorno mensual
         monthly_return = 0
         for ticker, weight in weights.items():
             if ticker in df.columns and ticker in prev_month.index:
                 try:
-                    price_ratio = df.iloc[i][ticker] / prev_month[ticker]
-                    monthly_return += weight * (price_ratio - 1)
-                except:
-                    pass
+                    if not np.isnan(prev_month[ticker]) and prev_month[ticker] != 0:
+                        price_ratio = df.iloc[i][ticker] / prev_month[ticker]
+                        monthly_return += weight * (price_ratio - 1)
+                except Exception as e:
+                    st.warning(f"⚠️ Error calculando retorno para {ticker}: {str(e)[:30]}")
         
         equity_curve.iloc[i] = equity_curve.iloc[i - 1] * (1 + monthly_return)
         
         # Actualizar progreso
         progress = int((i / total_months) * 100)
         progress_bar.progress(progress)
-        status_text.text(f"📊 Procesando mes {i} de {total_months}")
+        if i % 10 == 0:  # Actualizar cada 10 meses para no sobrecargar
+            status_text.text(f"📊 Procesando mes {i} de {total_months}")
     
     progress_bar.empty()
     status_text.empty()
