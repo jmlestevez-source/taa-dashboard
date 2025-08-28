@@ -208,7 +208,7 @@ def download_data_individual_with_retry(tickers, start_date, end_date, max_retri
     progress_bar.empty()
     status_text.empty()
     
-    if individual_
+            if individual_data:
         df = pd.DataFrame(individual_data)
         if failed_tickers:
             st.warning(f"⚠️ No se pudieron descargar: {', '.join(failed_tickers)}")
