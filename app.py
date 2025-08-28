@@ -5,10 +5,17 @@ import plotly.graph_objects as go
 from datetime import datetime
 import yfinance as yf
 import time
-import requests_cache
 
-# 🔧 Parche para yfinance - User-Agent moderno
+# Configuración de la página (DEBE ser lo primero)
+st.set_page_config(
+    page_title="🎯 TAA Dashboard", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# 🔧 Parche para yfinance - User-Agent moderno (con manejo de errores)
 try:
+    import requests_cache
     # Configurar sesión con user-agent moderno
     session = requests_cache.CachedSession(
         "yfinance.cache",
@@ -19,15 +26,17 @@ try:
     )
     yf.utils.session = session
     st.success("✅ Parche de yfinance aplicado correctamente")
-except:
-    st.warning("⚠️ No se pudo aplicar el parche de yfinance")
-
-# Configuración de la página
-st.set_page_config(
-    page_title="🎯 TAA Dashboard", 
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+except ImportError:
+    st.warning("⚠️ requests-cache no disponible. Usando configuración básica de yfinance")
+    # Configuración básica de headers
+    import requests
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+    })
+    yf.utils.session = session
+except Exception as e:
+    st.warning(f"⚠️ No se pudo aplicar el parche de yfinance: {str(e)}")
 
 # Título y descripción
 st.title("🎯 Tactical Asset Allocation Dashboard")
@@ -199,7 +208,7 @@ def download_data_individual_with_retry(tickers, start_date, end_date, max_retri
     progress_bar.empty()
     status_text.empty()
     
-    if individual_data:
+    if individual_
         df = pd.DataFrame(individual_data)
         if failed_tickers:
             st.warning(f"⚠️ No se pudieron descargar: {', '.join(failed_tickers)}")
