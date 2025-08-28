@@ -86,33 +86,46 @@ def create_robust_session():
 
 # === DESCARGA ÚNICA Y CACHÉ ===
 def download_all_tickers_conservative(tickers, start, end):
-    st.info(f"📊 Descargando {len(tickers)} tickers entre {start} y {end}…")
-    session = create_robust_session()
-    yf.utils.session = session
-    data = yf.download(
-        tickers=tickers,
-        start=start,
-        end=end,
-        interval="1mo",
-        auto_adjust=True,
-        threads=False,
-        progress=False,
-        timeout=30
-    )
-
+    st.info(f"📊 Descargando {len(tickers)} tickers (modo lento anti-429)…")
     data_dict = {}
-    if isinstance(data.columns, pd.MultiIndex):
-        for t in tickers:
-            if ("Close", t) in data.columns:
-                df = data.xs(t, level=1, axis=1).dropna()
-                data_dict[t] = df
-    else:
-        if "Close" in data.columns:
-            data_dict[tickers[0]] = data
+    progress_bar = st.progress(0)
 
-    st.success(f"✅ Descargados {len(data_dict)} tickers")
+    for idx, sym in enumerate(tickers, start=1):
+        try:
+            df = yf.download(
+                tickers=sym,
+                start=start,
+                end=end,
+                interval="1mo",
+                auto_adjust=True,
+                threads=False,
+                progress=False
+            )
+            if df is None or df.empty:
+                st.warning(f"⚠️ Sin datos para {sym}")
+                continue
+            # quitar zona horaria
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
+            data_dict[sym] = df
+            st.success(f"✅ {sym}")
+        except Exception as e:
+            st.warning(f"❌ {sym}: {e}")
+
+        # pausa entre tickers
+        time.sleep(2 + random.uniform(0, 2))
+
+        # cada 10 tickers, pausa extra
+        if idx % 10 == 0:
+            st.info(f"⏱️ Pausa extra tras {idx} tickers…")
+            time.sleep(5)
+
+        progress_bar.progress(idx / len(tickers))
+
+    progress_bar.empty()
+    st.success(f"✅ Finalizado: {len(data_dict)} ok, {len(tickers)-len(data_dict)} fallos")
     return data_dict
-
+    
 # === UTILS ===
 def clean_and_align_data(data_dict):
     if not data_dict:
@@ -259,7 +272,7 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
 
                 # === SEÑALES ===
                 st.subheader("📈 Señales de asignación")
-                today_df = cached_download(
+                today_df = download_all_tickers_conservative(
                     list(set(RISKY + PROTECTIVE + CANARY)),
                     datetime.today() - pd.DateOffset(months=13),
                     datetime.today()
