@@ -79,75 +79,96 @@ benchmark = st.sidebar.selectbox(
 
 # Función para descargar datos (ya funciona bien)
 def download_all_tickers_conservative(tickers):
-    """Descarga todos los tickers con enfoque conservador"""
+    """Descarga todos los tickers con enfoque conservador y manejo de rate limits."""
     st.info(f"📊 Descargando datos para {len(tickers)} tickers...")
+
     data_dict = {}
     errors = []
-    
     progress_bar = st.progress(0)
     status_text = st.empty()
-    
+
     for i, ticker in enumerate(tickers):
-        try:
-            status_text.text(f"📥 Descargando {ticker} ({i+1}/{len(tickers)})")
-            
-            # Usar enfoque que funciona
-            data = yf.download(
-                ticker,
-                period="10y",
-                interval="1mo",
-                auto_adjust=True,
-                progress=False,
-                group_by='ticker'
-            )
-            
-            if data is not None and not data.empty:
-                # Asegurarse de que el índice es de tipo datetime y ordenarlo
-                data.index = pd.to_datetime(data.index)
-                data.sort_index(inplace=True)
-                data_dict[ticker] = data
-                st.success(f"✅ {ticker} descargado")
-            else:
-                st.warning(f"⚠️ No se obtuvieron datos para {ticker}")
-                errors.append(ticker)
-                
-        except Exception as e:
-            st.error(f"❌ Error al descargar {ticker}: {str(e)[:50]}")
-            errors.append(ticker)
-        
-        # Pequeña pausa entre tickers
-        time.sleep(random.uniform(0.5, 1.5))
+        status_text.text(f"📥 Descargando {ticker} ({i+1}/{len(tickers)})")
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Usar yf.Ticker para más control
+                stock = yf.Ticker(ticker)
+                hist = stock.history(period="10y", interval="1mo", auto_adjust=True)
+
+                if hist is not None and not hist.empty:
+                    hist.index = pd.to_datetime(hist.index)
+                    hist.sort_index(inplace=True)
+
+                    # Verificar que tiene columna 'Close'
+                    if "Close" not in hist.columns:
+                        st.warning(f"⚠️ {ticker} no tiene columna 'Close'. Columnas: {list(hist.columns)}")
+                        errors.append(ticker)
+                        break
+
+                    data_dict[ticker] = hist
+                    st.success(f"✅ {ticker} descargado")
+                    time.sleep(random.uniform(1, 2))  # Pausa más larga
+                    break  # Salir del bucle de reintentos
+
+                else:
+                    st.warning(f"⚠️ Sin datos para {ticker}")
+                    errors.append(ticker)
+                    break
+
+            except Exception as e:
+                st.error(f"❌ Error al descargar {ticker} (intento {attempt + 1}): {str(e)[:50]}")
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt + random.uniform(0, 1)
+                    time.sleep(wait)
+                else:
+                    errors.append(ticker)
+
         progress_bar.progress((i + 1) / len(tickers))
-    
+
     progress_bar.empty()
     status_text.empty()
-    
+
     if errors:
         st.warning(f"⚠️ Errores en: {', '.join(errors)}")
-    
+
     st.success(f"✅ Descarga completada: {len(data_dict)} exitosos, {len(errors)} errores")
     return data_dict
-
+    
 def clean_and_align_data(data_dict):
-    """Convierte dict de datos a DataFrame alineado"""
+    """Convierte dict de datos a DataFrame alineado."""
     if not data_dict:
         st.error("❌ No hay datos para procesar")
         return None
-    
+
     try:
-        # Extraer solo 'Close' prices
         close_data = {}
         for ticker, df in data_dict.items():
-            if 'Close' in df.columns:
-                close_data[ticker] = df['Close']
+            if "Close" in df.columns:
+                close_data[ticker] = df["Close"]
             else:
-                # Si hay múltiples columnas, buscar 'Close'
-                st.warning(f"🔍 Buscando 'Close' en {ticker}: columnas disponibles {list(df.columns)}")
-                close_data[ticker] = df.iloc[:, 0]  # Primer columna como fallback
-        
+                st.warning(f"🔍 No se encontró 'Close' en {ticker}. Columnas: {list(df.columns)}")
+                continue  # Saltar si no hay Close
+
         if not close_data:
-            st.error("❌ No se pudieron extraer precios de cierre")
+            st.error("❌ No se pudieron extraer precios de cierre de ningún ticker")
             return None
+
+        df = pd.DataFrame(close_data)
+
+        # Limpiar NaNs
+        df = df.dropna(axis=1, how='all').fillna(method='ffill').fillna(method='bfill').dropna(how='all')
+
+        if df.empty:
+            st.error("❌ DataFrame limpio está vacío")
+            return None
+
+        st.success(f"✅ Datos procesados: {len(df)} filas, {len(df.columns)} columnas")
+        return df
+
+    except Exception as e:
+        st.error(f"❌ Error en procesamiento de datos: {str(e)}")
+        return None
         
         # Crear DataFrame
         df = pd.DataFrame(close_data)
