@@ -205,7 +205,15 @@ def compute_weights(df, canary, risky, protective):
 def run_daa_keller(initial_capital, benchmark, start, end):
     ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
     data_dict = cached_download(ALL_TICKERS, start, end)
-    if not data_dict:
+if not data_dict:
+    return None
+
+for k, v in data_dict.items():
+    if isinstance(v, pd.Series):
+        data_dict[k] = v.to_frame()
+
+df = clean_and_align_data(data_dict)
+if df is None or df.empty:
     return None
 
 # 👇 Aquí normalizamos Series → DataFrame
