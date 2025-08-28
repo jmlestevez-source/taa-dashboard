@@ -87,7 +87,7 @@ def calc_metrics(rets):
 # ------------- MOTORES -------------
 def weights_daa(df, risky, protect, canary):
     sig = []
-    for i in range(1, len(df)):
+    for i in range(5, len(df)):  # empieza en 5 para tener histórico suficiente
         can = {s: momentum_score(df.iloc[:i], s) for s in canary if s in df}
         ris = {s: momentum_score(df.iloc[:i], s) for s in risky  if s in df}
         pro = {s: momentum_score(df.iloc[:i], s) for s in protect if s in df}
@@ -105,30 +105,27 @@ def weights_daa(df, risky, protect, canary):
         else:
             w = {}
         sig.append((df.index[i], w))
-    return sig
+    return sig if sig else [(df.index[-1], {})]  # evita lista vacía
 
 def weights_roc4(df, universe, fill):
     sig = []
     base_weight = 1 / 6
-    for i in range(1, len(df)):
+    for i in range(5, len(df)):
         roc = {s: momentum_score(df.iloc[:i], s) for s in universe if s in df}
         fill_roc = {s: momentum_score(df.iloc[:i], s) for s in fill if s in df}
-        # ETFs con ROC > 0
         positive = [s for s, v in roc.items() if v > 0]
         selected = sorted(positive, key=lambda s: roc[s], reverse=True)[:6]
         n_sel = len(selected)
         weights = {}
-        # Asignar 16.667 % a cada ETF seleccionado
         for s in selected:
             weights[s] = base_weight
-        # Rellenar huecos con el mejor defensivo
-        if n_sel < 6:
-            best_def = max(fill_roc, key=fill_roc.get) if fill_roc else None
+        if n_sel < 6 and fill_roc:
+            best_def = max(fill_roc, key=fill_roc.get)
             extra = (6 - n_sel) * base_weight
             weights[best_def] = weights.get(best_def, 0) + extra
         sig.append((df.index[i], weights))
-    return sig
-
+    return sig if sig else [(df.index[-1], {})]
+    
 # ------------- MAIN -------------
 if st.sidebar.button("🚀 Ejecutar", type="primary"):
     if not active:
