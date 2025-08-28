@@ -5,6 +5,22 @@ import plotly.graph_objects as go
 from datetime import datetime
 import yfinance as yf
 import time
+import requests_cache
+
+# 🔧 Parche para yfinance - User-Agent moderno
+try:
+    # Configurar sesión con user-agent moderno
+    session = requests_cache.CachedSession(
+        "yfinance.cache",
+        expire_after=3600,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
+        }
+    )
+    yf.utils.session = session
+    st.success("✅ Parche de yfinance aplicado correctamente")
+except:
+    st.warning("⚠️ No se pudo aplicar el parche de yfinance")
 
 # Configuración de la página
 st.set_page_config(
@@ -32,7 +48,7 @@ initial_capital = st.sidebar.number_input(
 # Selector de estrategias
 strategies = st.sidebar.multiselect(
     "📊 Selecciona Estrategias",
-    ["DAA KELLER", "Datos de prueba"],
+    ["DAA KELLER"],
     ["DAA KELLER"]
 )
 
@@ -135,32 +151,24 @@ def calculate_drawdown_series(equity_series):
     drawdown = (equity_series - running_max) / running_max * 100
     return drawdown
 
-def download_single_ticker_with_delay(ticker, start_date, end_date):
-    """Descarga un solo ticker con delay para evitar rate limiting"""
+def download_single_ticker_with_patched_yfinance(ticker, start_date, end_date):
+    """Descarga un solo ticker usando el parche de yfinance"""
     try:
-        # Añadir un pequeño delay aleatorio
-        time.sleep(0.1 + np.random.random() * 0.2)
+        # Usar Ticker.history() en lugar de download() para mayor fiabilidad
+        ticker_obj = yf.Ticker(ticker)
+        data = ticker_obj.history(start=start_date, end=end_date, auto_adjust=True)
         
-        data = yf.download(
-            ticker, 
-            start=start_date, 
-            end=end_date,
-            progress=False,
-            threads=False,
-            timeout=10
-        )
-        
-        if not data.empty:
-            if 'Adj Close' in data.columns:
-                return data['Adj Close']
-            elif len(data.columns) > 0:
-                return data.iloc[:, 0]  # Primer columna
+        if not data.empty and 'Close' in data.columns:
+            return data['Close']
+        elif not data.empty:
+            return data.iloc[:, 0]  # Primera columna si no hay 'Close'
         return None
-    except:
+    except Exception as e:
+        st.warning(f"Error descargando {ticker}: {str(e)[:50]}")
         return None
 
-def download_data_individual_with_retry(tickers, start_date, end_date, max_retries=2):
-    """Descarga datos individualmente con reintentos"""
+def download_data_individual_with_retry(tickers, start_date, end_date, max_retries=3):
+    """Descarga datos individualmente con reintentos y parche"""
     individual_data = {}
     failed_tickers = []
     
@@ -172,16 +180,16 @@ def download_data_individual_with_retry(tickers, start_date, end_date, max_retri
         for attempt in range(max_retries):
             try:
                 status_text.text(f"📥 Descargando {ticker} (intento {attempt+1}/{max_retries})")
-                ticker_data = download_single_ticker_with_delay(ticker, start_date, end_date)
+                ticker_data = download_single_ticker_with_patched_yfinance(ticker, start_date, end_date)
                 
                 if ticker_data is not None and not ticker_data.empty:
                     individual_data[ticker] = ticker_data
                     success = True
                     break
                 else:
-                    time.sleep(1)  # Esperar antes de reintentar
+                    time.sleep(2 ** attempt)  # Exponential backoff
             except Exception as e:
-                time.sleep(1)  # Esperar antes de reintentar
+                time.sleep(2 ** attempt)  # Exponential backoff
         
         if not success:
             failed_tickers.append(ticker)
@@ -198,63 +206,6 @@ def download_data_individual_with_retry(tickers, start_date, end_date, max_retri
         return df
     else:
         return None
-
-def generate_sample_data():
-    """Genera datos de muestra para demostración"""
-    st.info("📊 Generando datos de muestra...")
-    
-    # Crear fechas mensuales (corregido ME en lugar de M)
-    dates = pd.date_range(start="2010-01-01", end="2023-12-31", freq='ME')
-    
-    # Generar datos sintéticos para diferentes activos
-    np.random.seed(42)  # Para reproducibilidad
-    
-    # Combinar todos los activos
-    all_assets = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
-    
-    # Generar datos sintéticos
-    data = {}
-    base_price = 100
-    
-    for asset in all_assets:
-        # Generar retornos aleatorios con tendencia
-        if asset in PROTECTIVE:
-            # Activos protectivos: baja volatilidad, rendimiento estable
-            returns = np.random.normal(0.002, 0.01, len(dates))  # 0.2% mensual, 1% vol
-        elif asset in CANARY:
-            # Canarios: volatilidad media
-            returns = np.random.normal(0.005, 0.03, len(dates))  # 0.5% mensual, 3% vol
-        else:
-            # Riesgosos: alta volatilidad
-            returns = np.random.normal(0.008, 0.05, len(dates))  # 0.8% mensual, 5% vol
-        
-        # Convertir retornos a precios
-        prices = [base_price]
-        for ret in returns:
-            prices.append(prices[-1] * (1 + ret))
-        prices = prices[1:]  # Eliminar el precio inicial duplicado
-        
-        data[asset] = pd.Series(prices, index=dates[:len(prices)])
-    
-    df = pd.DataFrame(data)
-    return df
-
-def download_data_with_fallback(tickers, start_date, end_date):
-    """Descarga datos con fallback a datos de muestra"""
-    try:
-        st.info("🔄 Intentando descargar datos reales...")
-        
-        # Intentar descarga individual con reintentos
-        df = download_data_individual_with_retry(tickers, start_date, end_date)
-        if df is not None and not df.empty:
-            return df
-            
-    except Exception as e:
-        st.warning(f"⚠️ No se pudieron descargar datos reales")
-    
-    # Fallback: generar datos de muestra
-    st.info("📊 Usando datos de muestra para demostración...")
-    return generate_sample_data()
 
 def clean_and_align_data(df):
     """Limpia y alinea los datos"""
@@ -278,8 +229,8 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
     
     st.info(f"📊 Descargando datos para {len(ALL_TICKERS)} tickers")
     
-    # Descargar datos con fallback
-    df = download_data_with_fallback(ALL_TICKERS, start_date, end_date)
+    # Descargar datos con parche
+    df = download_data_individual_with_retry(ALL_TICKERS, start_date, end_date)
     
     if df is None or df.empty:
         st.error("❌ No se pudieron obtener datos históricos")
@@ -423,11 +374,6 @@ def run_combined_strategies(strategies, initial_capital, start_date, end_date, b
             result = run_daa_keller(initial_capital, start_date, end_date, benchmark)
             if result:
                 strategy_results[strategy] = result
-        elif strategy == "Datos de prueba":
-            # Ejecutar con datos de muestra
-            result = run_daa_keller(initial_capital, start_date, end_date, benchmark)
-            if result:
-                strategy_results["DAA KELLER (Demo)"] = result
     
     if not strategy_results:
         return None
@@ -672,12 +618,6 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
                        - 0 canarios negativos: 100% repartido entre 6 riesgosos mejores
                     3. Rebalanceo mensual al cierre del último día del mes
                     """)
-                
-                # Nota sobre datos de muestra
-                if "Datos de prueba" in strategies:
-                    st.info("ℹ️ **Nota**: Actualmente usando datos sintéticos para demostración. "
-                           "Para usar datos reales, inténtalo en un entorno local o espera a que se resuelva "
-                           "el problema de conectividad con Yahoo Finance.")
             else:
                 st.error("No se pudieron obtener resultados. Verifica las fechas y las estrategias seleccionadas.")
 else:
@@ -696,7 +636,6 @@ else:
     
     **Estrategias implementadas:**
     - DAA KELLER: Estrategia de Andrew Keller con canarios (editable)
-    - Datos de prueba: Datos sintéticos para demostración
     
     **Cómo usar:**
     1. Ingresa tu capital inicial
@@ -709,4 +648,4 @@ else:
 
 # Footer
 st.markdown("---")
-st.caption("📊 TAA Dashboard | Datos: Yahoo Finance (o datos sintéticos) | Desarrollado con Streamlit")
+st.caption("📊 TAA Dashboard | Datos: Yahoo Finance | Desarrollado con Streamlit")
