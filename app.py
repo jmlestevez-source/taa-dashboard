@@ -76,7 +76,7 @@ def create_robust_session():
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
         "Connection": "keep-alive",
-        "Referer": "https://finance.yahoo.com/"
+        "Referer": "https://finance.yahoo.com/ "
     })
     retries = Retry(total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
     adapter = HTTPAdapter(max_retries=retries)
@@ -107,12 +107,19 @@ def download_all_tickers_conservative(tickers, start, end):
                 )
                 if df.empty:
                     raise ValueError("Sin datos")
-                # quitar zona horaria
-                if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
-                    df.index = df.index.tz_localize(None)
-                # convertir Series en DataFrame si hace falta
+                
+                # Manejar correctamente el DataFrame/Series
                 if isinstance(df, pd.Series):
-                    df = df.to_frame()
+                    df = df.to_frame(name='Close')
+                elif isinstance(df, pd.DataFrame) and len(df.columns) == 1:
+                    df.columns = ['Close']
+                
+                # Asegurar que el índice sea datetime sin zona horaria
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    df.index = pd.to_datetime(df.index)
+                if df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+                
                 data_dict[sym] = df
                 st.success(f"✅ {sym}")
                 break
@@ -139,27 +146,54 @@ def clean_and_align_data(data_dict):
         st.error("❌ No hay datos para procesar")
         return None
     try:
-        # convertir Series → DataFrame y extraer Close
         close_data = {}
         for t, df in data_dict.items():
+            # Asegurar que df es un DataFrame
             if isinstance(df, pd.Series):
-                df = df.to_frame()
+                df = df.to_frame(name='Close')
+            elif isinstance(df, pd.DataFrame) and len(df.columns) == 1:
+                df.columns = ['Close']
+            
+            # Extraer columna Close si existe
             if "Close" in df.columns:
                 close_data[t] = df["Close"].dropna()
+            else:
+                # Si no hay Close, usar la primera columna disponible
+                first_col = df.columns[0] if len(df.columns) > 0 else None
+                if first_col:
+                    close_data[t] = df[first_col].dropna()
+        
         if not close_data:
             st.error("❌ No se pudieron extraer precios de cierre")
             return None
-        df = pd.DataFrame(close_data).ffill().bfill().dropna(how='all')
-        return df if not df.empty else None
+            
+        # Crear DataFrame con todos los datos
+        df_result = pd.DataFrame(close_data)
+        if df_result.empty:
+            return None
+            
+        # Rellenar valores faltantes y eliminar filas completamente vacías
+        df_result = df_result.ffill().bfill().dropna(how='all')
+        return df_result if not df_result.empty else None
     except Exception as e:
         st.error(f"❌ Error procesando datos: {str(e)}")
         return None
 
 def momentum_score(df, symbol):
-    if len(df) < 13:
+    if len(df) < 13 or symbol not in df.columns:
         return 0
     try:
-        p0, p1, p3, p6, p12 = [float(df[symbol].iloc[-i]) for i in [1, 2, 4, 7, 13]]
+        # Verificar que haya suficientes datos no nulos
+        symbol_data = df[symbol].dropna()
+        if len(symbol_data) < 13:
+            return 0
+            
+        # Tomar los últimos 13 puntos de datos disponibles
+        recent_data = symbol_data.iloc[-13:]
+        if len(recent_data) < 13:
+            return 0
+            
+        p0, p1, p3, p6, p12 = [float(recent_data.iloc[-i]) for i in [1, 2, 4, 7, 13]]
         return (12 * (p0 / p1)) + (4 * (p0 / p3)) + (2 * (p0 / p6)) + (p0 / p12) - 19
     except Exception:
         return 0
@@ -188,6 +222,9 @@ def calculate_drawdown_series(equity_series):
     return (equity_series - running_max) / running_max * 100
 
 def compute_weights(df, canary, risky, protective):
+    if df.empty:
+        return {}
+        
     canary_scores = {s: momentum_score(df, s) for s in canary if s in df.columns}
     risky_scores = {s: momentum_score(df, s) for s in risky if s in df.columns}
     protective_scores = {s: momentum_score(df, s) for s in protective if s in df.columns}
@@ -214,15 +251,30 @@ def run_daa_keller(initial_capital, benchmark, start, end):
     ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
     data_dict = cached_download(ALL_TICKERS, start, end)
 
-    # Convertir Series → DataFrame
+    # Convertir Series → DataFrame (mejorado)
     for k, v in data_dict.items():
         if isinstance(v, pd.Series):
-            data_dict[k] = v.to_frame()
+            data_dict[k] = v.to_frame(name='Close')
+        elif isinstance(v, pd.DataFrame) and len(v.columns) == 1:
+            v.columns = ['Close']
 
     df = clean_and_align_data(data_dict)
     if df is None or df.empty:
         return None
 
+    # Asegurar que todas las columnas necesarias existen
+    required_cols = [benchmark] + CANARY + RISKY + PROTECTIVE
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        st.warning(f"Faltan columnas: {missing_cols}")
+        # Filtrar solo las columnas disponibles
+        available_cols = [col for col in required_cols if col in df.columns]
+        if not available_cols:
+            st.error("No hay suficientes datos para calcular la estrategia")
+            return None
+        required_cols = available_cols
+
+    # Continuar con el cálculo...
     equity_curve = pd.Series(index=df.index, dtype=float)
     equity_curve.iloc[0] = initial_capital
     progress_bar = st.progress(0)
@@ -235,17 +287,29 @@ def run_daa_keller(initial_capital, benchmark, start, end):
         for ticker, weight in weights.items():
             if ticker in df.columns and ticker in prev_month.index:
                 try:
-                    monthly_return += (weight / 100) * (df.iloc[i][ticker] / prev_month[ticker] - 1)
-                except Exception:
+                    if pd.notna(df.iloc[i][ticker]) and pd.notna(prev_month[ticker]) and prev_month[ticker] != 0:
+                        monthly_return += (weight / 100) * (df.iloc[i][ticker] / prev_month[ticker] - 1)
+                except Exception as e:
+                    st.warning(f"Error calculando retorno para {ticker}: {e}")
                     pass
         equity_curve.iloc[i] = equity_curve.iloc[i - 1] * (1 + monthly_return)
         progress_bar.progress(int((i / total_months) * 100))
     progress_bar.empty()
 
-    benchmark_data = df[benchmark] if benchmark in df.columns else pd.Series(1, index=df.index)
-    benchmark_equity = benchmark_data / benchmark_data.iloc[0] * initial_capital
+    # Asegurar que benchmark_data tenga datos
+    if benchmark in df.columns:
+        benchmark_data = df[benchmark].dropna()
+        if not benchmark_data.empty:
+            benchmark_equity = benchmark_data / benchmark_data.iloc[0] * initial_capital
+        else:
+            # Crear benchmark sintético si no hay datos
+            benchmark_equity = pd.Series(1, index=df.index) * initial_capital
+    else:
+        benchmark_equity = pd.Series(1, index=df.index) * initial_capital
+
     portfolio_returns = equity_curve.pct_change().dropna()
     benchmark_returns = benchmark_equity.pct_change().dropna()
+    
     return {
         "dates": equity_curve.index,
         "portfolio": equity_curve,
@@ -300,7 +364,9 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
                 if today_df:
                     for k, v in today_df.items():
                         if isinstance(v, pd.Series):
-                            today_df[k] = v.to_frame()
+                            today_df[k] = v.to_frame(name='Close')
+                        elif isinstance(v, pd.DataFrame) and len(v.columns) == 1:
+                            v.columns = ['Close']
                     today_df = clean_and_align_data(today_df)
                     if today_df is not None and not today_df.empty:
                         weights_now = compute_weights(today_df, CANARY, RISKY, PROTECTIVE)
