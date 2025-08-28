@@ -8,6 +8,13 @@ import time
 import random
 import requests
 
+# 🔧 Configuración de la página (DEBE ser lo primero)
+st.set_page_config(
+    page_title="🎯 TAA Dashboard", 
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 # 🔧 Configurar yfinance con User-Agent personalizado
 try:
     # Crear sesión con User-Agent moderno
@@ -24,13 +31,6 @@ try:
     yf.enable_debug_mode()
 except Exception as e:
     st.warning(f"⚠️ No se pudo configurar User-Agent: {e}")
-
-# Configuración de la página (DEBE ser lo primero)
-st.set_page_config(
-    page_title="🎯 TAA Dashboard", 
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # Título y descripción
 st.title("🎯 Tactical Asset Allocation Dashboard")
