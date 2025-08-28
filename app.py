@@ -286,7 +286,7 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
 
                 dd = go.Figure()
                 dd.add_trace(go.Scatter(x=result["dates"], y=result["portfolio_drawdown"], fill='tozeroy', name="Portfolio Drawdown", line=dict(color="red")))
-                dd.add_trace(go.Scatter(x=result["dates"], y=result["benchmark_drawdown"], fill='tozeroy', name=f"{benchmark} Drawdown", line=dict(color="orange")))
+                dd.add_trace(go.Scatter(x=result["dates"], y=result["benchmark_drawdown"], fill='tozeroy', name=f"{benchmark} Drawdown", line=dict(color="blue")))
                 dd.update_layout(height=400, xaxis_title="Fecha", yaxis_title="Drawdown (%)")
                 st.plotly_chart(dd, use_container_width=True)
 else:
