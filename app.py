@@ -261,23 +261,10 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
         with st.spinner("Analizando..."):
             result = run_daa_keller(initial_capital, benchmark, start_date, end_date)
             if result:
-                st.subheader("📊 Métricas de la Estrategia")
                 col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("📈 CAGR", f"{result['portfolio_metrics']['CAGR']}%")
-                with col2:
-                    st.metric("🔻 Max Drawdown", f"{result['portfolio_metrics']['Max Drawdown']}%")
-                with col3:
-                    st.metric("⭐ Sharpe Ratio", f"{result['portfolio_metrics']['Sharpe Ratio']}")
-
-                st.subheader("📊 Métricas del SPY")
-                col4, col5, col6 = st.columns(3)
-                with col4:
-                    st.metric("📈 CAGR", f"{result['benchmark_metrics']['CAGR']}%")
-                with col5:
-                    st.metric("🔻 Max Drawdown", f"{result['benchmark_metrics']['Max Drawdown']}%")
-                with col6:
-                    st.metric("⭐ Sharpe Ratio", f"{result['benchmark_metrics']['Sharpe Ratio']}")
+                col1.metric("📈 CAGR", f"{result['portfolio_metrics']['CAGR']}%")
+                col2.metric("🔻 Max Drawdown", f"{result['portfolio_metrics']['Max Drawdown']}%")
+                col3.metric("⭐ Sharpe Ratio", f"{result['portfolio_metrics']['Sharpe Ratio']}")
 
                 # Gráfico de equity
                 fig = go.Figure()
