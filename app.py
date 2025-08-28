@@ -5,38 +5,15 @@ import plotly.graph_objects as go
 from datetime import datetime
 import yfinance as yf
 import time
+import pytz
+import requests
 
-# Configuración de la página (DEBE ser lo primero)
+# Configuración de la página
 st.set_page_config(
     page_title="🎯 TAA Dashboard", 
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-# 🔧 Parche para yfinance - User-Agent moderno (con manejo de errores)
-try:
-    import requests_cache
-    # Configurar sesión con user-agent moderno
-    session = requests_cache.CachedSession(
-        "yfinance.cache",
-        expire_after=3600,
-        headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
-        }
-    )
-    yf.utils.session = session
-    st.success("✅ Parche de yfinance aplicado correctamente")
-except ImportError:
-    st.warning("⚠️ requests-cache no disponible. Usando configuración básica de yfinance")
-    # Configuración básica de headers
-    import requests
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36"
-    })
-    yf.utils.session = session
-except Exception as e:
-    st.warning(f"⚠️ No se pudo aplicar el parche de yfinance: {str(e)}")
 
 # Título y descripción
 st.title("🎯 Tactical Asset Allocation Dashboard")
@@ -54,7 +31,7 @@ initial_capital = st.sidebar.number_input(
     step=1000
 )
 
-# Selector de estrategias
+# Selector de estrategias (solo DAA KELLER)
 strategies = st.sidebar.multiselect(
     "📊 Selecciona Estrategias",
     ["DAA KELLER"],
@@ -108,7 +85,7 @@ end_date = st.sidebar.date_input("📅 Fecha Fin", datetime.today())
 # Funciones auxiliares
 def momentum_score(df, symbol):
     """Calcula el momentum score para un símbolo"""
-    if len(df) < 21:
+    if len(df) < 21 or symbol not in df.columns:
         return 0
     try:
         p0 = float(df[symbol].iloc[-1])
@@ -137,7 +114,7 @@ def calculate_metrics(returns, initial_capital):
     
     # CAGR (anualizado correctamente)
     total_return = equity.iloc[-1] / equity.iloc[0] - 1
-    years = len(returns) / 252  # Años comerciales
+    years = len(returns) / 252
     cagr = (1 + total_return) ** (1/years) - 1 if years > 0 else 0
     
     # Max Drawdown
@@ -160,47 +137,57 @@ def calculate_drawdown_series(equity_series):
     drawdown = (equity_series - running_max) / running_max * 100
     return drawdown
 
-def download_single_ticker_with_patched_yfinance(ticker, start_date, end_date):
-    """Descarga un solo ticker usando el parche de yfinance"""
-    try:
-        # Usar Ticker.history() en lugar de download() para mayor fiabilidad
-        ticker_obj = yf.Ticker(ticker)
-        data = ticker_obj.history(start=start_date, end=end_date, auto_adjust=True)
-        
-        if not data.empty and 'Close' in data.columns:
-            return data['Close']
-        elif not data.empty:
-            return data.iloc[:, 0]  # Primera columna si no hay 'Close'
-        return None
-    except Exception as e:
-        st.warning(f"Error descargando {ticker}: {str(e)[:50]}")
-        return None
+def download_single_ticker_with_delay(ticker, start_date, end_date, max_retries=3):
+    """Descarga un solo ticker con reintentos y manejo de timezone"""
+    for attempt in range(max_retries):
+        try:
+            # Añadir delay para evitar rate limiting
+            time.sleep(0.5 + np.random.random() * 1.0)
+            
+            # Forzar timezone UTC para evitar problemas
+            ticker_obj = yf.Ticker(ticker)
+            data = ticker_obj.history(
+                start=start_date,
+                end=end_date,
+                auto_adjust=True,
+                prepost=False,
+                timeout=30
+            )
+            
+            if not data.empty and 'Close' in data.columns:
+                # Asegurar que el índice sea datetime UTC
+                data.index = data.index.tz_localize('UTC')
+                return data['Close']
+                
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)  # Backoff exponencial
+                continue
+            else:
+                st.warning(f"⚠️ Error al descargar {ticker}: {str(e)[:50]}...")
+                return None
+    return None
 
-def download_data_individual_with_retry(tickers, start_date, end_date, max_retries=3):
-    """Descarga datos individualmente con reintentos y parche"""
+def download_data_individual_with_retry(tickers, start_date, end_date):
+    """Descarga datos individualmente con reintentos mejorados"""
     individual_data = {}
     failed_tickers = []
     
     progress_bar = st.progress(0)
     status_text = st.empty()
     
+    # Convertir fechas a datetime UTC
+    start_date = pd.to_datetime(start_date).tz_localize('UTC')
+    end_date = pd.to_datetime(end_date).tz_localize('UTC')
+    
     for i, ticker in enumerate(tickers):
-        success = False
-        for attempt in range(max_retries):
-            try:
-                status_text.text(f"📥 Descargando {ticker} (intento {attempt+1}/{max_retries})")
-                ticker_data = download_single_ticker_with_patched_yfinance(ticker, start_date, end_date)
-                
-                if ticker_data is not None and not ticker_data.empty:
-                    individual_data[ticker] = ticker_data
-                    success = True
-                    break
-                else:
-                    time.sleep(2 ** attempt)  # Exponential backoff
-            except Exception as e:
-                time.sleep(2 ** attempt)  # Exponential backoff
+        status_text.text(f"📥 Descargando {ticker}...")
         
-        if not success:
+        ticker_data = download_single_ticker_with_delay(ticker, start_date, end_date)
+        
+        if ticker_data is not None and not ticker_data.empty:
+            individual_data[ticker] = ticker_data
+        else:
             failed_tickers.append(ticker)
         
         progress_bar.progress((i + 1) / len(tickers))
@@ -208,12 +195,13 @@ def download_data_individual_with_retry(tickers, start_date, end_date, max_retri
     progress_bar.empty()
     status_text.empty()
     
-    if individual_data:  # <-- Línea corregida
+    if individual_data:
         df = pd.DataFrame(individual_data)
         if failed_tickers:
             st.warning(f"⚠️ No se pudieron descargar: {', '.join(failed_tickers)}")
         return df
     else:
+        st.error("❌ No se pudieron descargar datos de ningún ticker")
         return None
 
 def clean_and_align_data(df):
@@ -233,12 +221,12 @@ def clean_and_align_data(df):
     return df
 
 def run_daa_keller(initial_capital, start_date, end_date, benchmark):
-    """Ejecuta la estrategia DAA KELLER"""
+    """Ejecuta la estrategia DAA KELLER con manejo mejorado de datos"""
     ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
     
-    st.info(f"📊 Descargando datos para {len(ALL_TICKERS)} tickers")
+    st.info(f"📊 Descargando datos para {len(ALL_TICKERS)} tickers...")
     
-    # Descargar datos con parche
+    # Descargar datos sin fallback a sintéticos
     df = download_data_individual_with_retry(ALL_TICKERS, start_date, end_date)
     
     if df is None or df.empty:
@@ -252,10 +240,10 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
         st.error("❌ No se pudieron limpiar los datos históricos")
         return None
     
-    st.success(f"✅ Datos descargados y limpiados: {len(df.columns)} tickers, {len(df)} registros")
+    st.success(f"✅ Datos descargados: {len(df.columns)} tickers, {len(df)} registros")
     
-    # Resamplear a mensual (corregido ME en lugar de M)
-    monthly = df.resample('ME').last()
+    # Resamplear a mensual usando el último día del mes
+    monthly = df.resample('M').last()
     if len(monthly) < 2:
         st.error("Período demasiado corto para análisis mensual")
         return None
@@ -299,7 +287,7 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
                 except:
                     protective_scores[symbol] = 0
         
-        # Determinar asignación
+        # Determinar asignación según reglas de DAA KELLER
         n = sum(1 for s in canary_scores.values() if s <= 0)
         
         if n == 2 and protective_scores:
@@ -315,7 +303,6 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
             top_risky = sorted(risky_scores, key=risky_scores.get, reverse=True)[:6]
             weights = {r: 1.0 / 6 for r in top_risky}
         else:
-            # Fallback: mantener posición anterior
             weights = {}
         
         # Calcular retorno mensual
@@ -340,9 +327,8 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
     
     # Calcular benchmark
     if benchmark in df.columns:
-        benchmark_data = df[benchmark].resample('ME').last()
+        benchmark_data = df[benchmark].resample('M').last()
         benchmark_equity = benchmark_data / benchmark_data.iloc[0] * initial_capital
-        # Alinear fechas
         benchmark_equity = benchmark_equity.reindex(equity_curve.index, method='ffill')
     else:
         benchmark_equity = pd.Series(initial_capital, index=equity_curve.index)
@@ -371,76 +357,14 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
         "benchmark_drawdown": benchmark_drawdown
     }
 
-def run_combined_strategies(strategies, initial_capital, start_date, end_date, benchmark):
-    """Ejecuta análisis combinado de estrategias"""
-    if not strategies:
-        return None
-    
-    # Ejecutar cada estrategia
-    strategy_results = {}
-    for strategy in strategies:
-        if strategy == "DAA KELLER":
-            result = run_daa_keller(initial_capital, start_date, end_date, benchmark)
-            if result:
-                strategy_results[strategy] = result
-    
-    if not strategy_results:
-        return None
-    
-    # Combinar resultados
-    all_dates = set()
-    for result in strategy_results.values():
-        all_dates.update(result["dates"])
-    all_dates = sorted(list(all_dates))
-    
-    # Crear equity curves combinadas
-    combined_portfolio = pd.Series(0.0, index=all_dates)
-    combined_benchmark = pd.Series(0.0, index=all_dates)
-    
-    # Sumar equity de cada estrategia
-    for result in strategy_results.values():
-        combined_portfolio = combined_portfolio.add(
-            result["portfolio"].reindex(all_dates, fill_value=0), 
-            fill_value=0
-        )
-        combined_benchmark = combined_benchmark.add(
-            result["benchmark"].reindex(all_dates, fill_value=0), 
-            fill_value=0
-        )
-    
-    # Calcular retornos combinados
-    combined_portfolio_returns = combined_portfolio.pct_change().dropna()
-    combined_benchmark_returns = combined_benchmark.pct_change().dropna()
-    
-    # Calcular métricas combinadas
-    combined_portfolio_metrics = calculate_metrics(combined_portfolio_returns, initial_capital)
-    combined_benchmark_metrics = calculate_metrics(combined_benchmark_returns, initial_capital)
-    
-    # Calcular drawdown combinado
-    combined_portfolio_drawdown = calculate_drawdown_series(combined_portfolio)
-    combined_benchmark_drawdown = calculate_drawdown_series(combined_benchmark)
-    
-    return {
-        "dates": combined_portfolio.index,
-        "portfolio": combined_portfolio,
-        "benchmark": combined_benchmark,
-        "portfolio_returns": combined_portfolio_returns,
-        "benchmark_returns": combined_benchmark_returns,
-        "portfolio_metrics": combined_portfolio_metrics,
-        "benchmark_metrics": combined_benchmark_metrics,
-        "portfolio_drawdown": combined_portfolio_drawdown,
-        "benchmark_drawdown": combined_benchmark_drawdown,
-        "individual_results": strategy_results
-    }
-
 # Botón de ejecución
 if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
     if not strategies:
         st.warning("Por favor, selecciona al menos una estrategia")
     else:
         with st.spinner("Analizando estrategias..."):
-            # Ejecutar análisis combinado
-            results = run_combined_strategies(strategies, initial_capital, start_date, end_date, benchmark)
+            # Ejecutar análisis
+            results = run_daa_keller(initial_capital, start_date, end_date, benchmark)
             
             if results:
                 # Mostrar métricas principales
@@ -473,7 +397,7 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
                     x=results['dates'],
                     y=results['portfolio'],
                     mode='lines',
-                    name='Portfolio Combinado',
+                    name='Portfolio DAA KELLER',
                     line=dict(color='#1f77b4', width=3)
                 ))
                 fig.add_trace(go.Scatter(
@@ -537,78 +461,6 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
                 
                 st.plotly_chart(fig_dd, use_container_width=True)
                 
-                # Mostrar resultados individuales si hay más de una estrategia
-                if len(strategies) > 1 and 'individual_results' in results:
-                    st.subheader("📋 Análisis Individual por Estrategia")
-                    
-                    tabs = st.tabs(list(results['individual_results'].keys()))
-                    for i, (strategy_name, strat_result) in enumerate(results['individual_results'].items()):
-                        with tabs[i]:
-                            col1, col2, col3 = st.columns(3)
-                            with col1:
-                                st.metric("📈 CAGR", f"{strat_result['portfolio_metrics']['CAGR']}%")
-                            with col2:
-                                st.metric("🔻 Max Drawdown", f"{strat_result['portfolio_metrics']['Max Drawdown']}%")
-                            with col3:
-                                st.metric("⭐ Sharpe Ratio", f"{strat_result['portfolio_metrics']['Sharpe Ratio']}")
-                            
-                            # Gráfico individual de equity
-                            fig_ind = go.Figure()
-                            fig_ind.add_trace(go.Scatter(
-                                x=strat_result['dates'],
-                                y=strat_result['portfolio'],
-                                mode='lines',
-                                name='Portfolio',
-                                line=dict(color='#1f77b4', width=2)
-                            ))
-                            fig_ind.add_trace(go.Scatter(
-                                x=strat_result['dates'],
-                                y=strat_result['benchmark'],
-                                mode='lines',
-                                name=benchmark,
-                                line=dict(color='#ff7f0e', width=2, dash='dash')
-                            ))
-                            
-                            fig_ind.update_layout(
-                                height=300,
-                                title=f"Equity Curve: {strategy_name} vs {benchmark}",
-                                hovermode='x unified',
-                                xaxis_title="Fecha",
-                                yaxis_title="Valor ($)"
-                            )
-                            
-                            st.plotly_chart(fig_ind, use_container_width=True)
-                            
-                            # Gráfico individual de drawdown
-                            fig_dd_ind = go.Figure()
-                            fig_dd_ind.add_trace(go.Scatter(
-                                x=strat_result['dates'],
-                                y=strat_result['portfolio_drawdown'],
-                                mode='lines',
-                                name='Portfolio Drawdown',
-                                line=dict(color='#1f77b4', width=2),
-                                fill='tozeroy'
-                            ))
-                            fig_dd_ind.add_trace(go.Scatter(
-                                x=strat_result['dates'],
-                                y=strat_result['benchmark_drawdown'],
-                                mode='lines',
-                                name=f'{benchmark} Drawdown',
-                                line=dict(color='#ff7f0e', width=2, dash='dash'),
-                                fill='tozeroy'
-                            ))
-                            
-                            fig_dd_ind.update_layout(
-                                height=250,
-                                title=f"Drawdown: {strategy_name} vs {benchmark}",
-                                hovermode='x unified',
-                                xaxis_title="Fecha",
-                                yaxis_title="Drawdown (%)",
-                                yaxis_tickformat=".1f"
-                            )
-                            
-                            st.plotly_chart(fig_dd_ind, use_container_width=True)
-                
                 # Información adicional
                 with st.expander("ℹ️ Detalles de la estrategia DAA KELLER"):
                     st.markdown(f"""
@@ -626,6 +478,8 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
                        - 1 canario negativo: 50% protectivo mejor + 50% repartido entre 6 riesgosos mejores
                        - 0 canarios negativos: 100% repartido entre 6 riesgosos mejores
                     3. Rebalanceo mensual al cierre del último día del mes
+                    
+                    **Datos:** Usando datos reales de Yahoo Finance
                     """)
             else:
                 st.error("No se pudieron obtener resultados. Verifica las fechas y las estrategias seleccionadas.")
@@ -638,23 +492,24 @@ else:
     st.markdown("""
     Esta aplicación permite analizar estrategias de Tactical Asset Allocation (TAA) con:
     
-    - **Análisis combinado** de múltiples estrategias
+    - **Análisis de estrategias reales** con datos de Yahoo Finance
     - **Métricas clave**: CAGR, Drawdown máximo, Ratio Sharpe
     - **Comparación** con benchmarks como SPY
     - **Visualización** interactiva de curvas de equity y drawdown
     
-    **Estrategias implementadas:**
-    - DAA KELLER: Estrategia de Andrew Keller con canarios (editable)
+    **Estrategia implementada:**
+    - **DAA KELLER**: Estrategia de Andrew Keller con canarios (totalmente editable)
     
     **Cómo usar:**
     1. Ingresa tu capital inicial
-    2. Selecciona las estrategias a analizar
-    3. Modifica los activos si lo deseas
-    4. Elige un benchmark de comparación
-    5. Establece el período de análisis
-    6. Haz clic en "Ejecutar Análisis"
+    2. Modifica los activos si lo deseas
+    3. Elige un benchmark de comparación
+    4. Establece el período de análisis
+    5. Haz clic en "Ejecutar Análisis"
+    
+    **⚠️ Nota:** Esta versión **solo usa datos reales** de Yahoo Finance, no incluye datos sintéticos.
     """)
 
 # Footer
 st.markdown("---")
-st.caption("📊 TAA Dashboard | Datos: Yahoo Finance | Desarrollado con Streamlit")
+st.caption("📊 TAA Dashboard | Datos: Yahoo Finance (reales) | Desarrollado con Streamlit y Python 3.11")
