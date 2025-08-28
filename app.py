@@ -34,7 +34,7 @@ CANARY = [x.strip() for x in canary_assets.split(',') if x.strip()]
 benchmark = st.sidebar.selectbox("📈 Benchmark", ["SPY", "QQQ", "IWM"], 0)
 
 # ---------------- API KEYS ----------------
-FMP_KEYS = ["6cb32e81af450a825085ffeef279c5c2", "FedUgaGEN9Pv19qgVxh2nHw0JWg5V6uh"]  # añade las que tengas
+FMP_KEYS = ["6cb32e81af450a825085ffeef279c5c2", "FedUgaGEN9Pv19qgVxh2nHw0JWg5V6uh","P95gSmpsyRFELMKi8t7tSC0tn5y5JBlg"]  # añade las que tengas
 def get_fmp_key():
     return random.choice(FMP_KEYS)
 
