@@ -84,65 +84,73 @@ def create_robust_session():
     session.mount("http://", adapter)
     return session
 
-# === DESCARGA ÚNICA Y CACHÉ ===
+# === DESCARGA 1-TICKER + PAUSAS ===
 def download_all_tickers_conservative(tickers, start, end):
-    st.info(f"📊 Descargando {len(tickers)} tickers (modo lento anti-429)…")
+    st.info(f"📊 Descargando {len(tickers)} tickers (modo 1-a-1 anti-429)…")
     data_dict = {}
+    errors = []
     progress_bar = st.progress(0)
 
     for idx, sym in enumerate(tickers, start=1):
-        try:
-            df = yf.download(
-                tickers=sym,
-                start=start,
-                end=end,
-                interval="1mo",
-                auto_adjust=True,
-                threads=False,
-                progress=False
-            )
-            if df is None or df.empty:
-                st.warning(f"⚠️ Sin datos para {sym}")
-                continue
-            # quitar zona horaria
-            if df.index.tz is not None:
-                df.index = df.index.tz_localize(None)
-            data_dict[sym] = df
-            st.success(f"✅ {sym}")
-        except Exception as e:
-            st.warning(f"❌ {sym}: {e}")
-
-        # pausa entre tickers
-        time.sleep(2 + random.uniform(0, 2))
-
-        # cada 10 tickers, pausa extra
+        for attempt in range(5):
+            try:
+                session = create_robust_session()
+                yf.utils.session = session
+                df = yf.download(
+                    tickers=sym,
+                    start=start,
+                    end=end,
+                    interval="1mo",
+                    auto_adjust=True,
+                    threads=False,
+                    progress=False
+                )
+                if df.empty:
+                    raise ValueError("Sin datos")
+                # quitar zona horaria
+                if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+                # convertir Series en DataFrame si hace falta
+                if isinstance(df, pd.Series):
+                    df = df.to_frame()
+                data_dict[sym] = df
+                st.success(f"✅ {sym}")
+                break
+            except Exception as e:
+                st.warning(f"❌ {sym} intento {attempt+1}: {str(e)[:50]}")
+                time.sleep(2 ** attempt + random.uniform(1, 3))
+        else:
+            errors.append(sym)
+        progress_bar.progress(idx / len(tickers))
+        time.sleep(2 + random.uniform(0, 2))  # pausa entre tickers
         if idx % 10 == 0:
             st.info(f"⏱️ Pausa extra tras {idx} tickers…")
             time.sleep(5)
 
-        progress_bar.progress(idx / len(tickers))
-
     progress_bar.empty()
-    st.success(f"✅ Finalizado: {len(data_dict)} ok, {len(tickers)-len(data_dict)} fallos")
+    if errors:
+        st.warning(f"❌ Errores: {', '.join(errors)}")
+    st.success(f"✅ Finalizado: {len(data_dict)} ok, {len(errors)} fallos")
     return data_dict
-    
+
 # === UTILS ===
 def clean_and_align_data(data_dict):
     if not data_dict:
         st.error("❌ No hay datos para procesar")
         return None
     try:
-        # Crear dict de Series con índice explícito
-        close_data = {t: df["Close"].dropna() for t, df in data_dict.items() if "Close" in df.columns}
+        # convertir Series → DataFrame y extraer Close
+        close_data = {}
+        for t, df in data_dict.items():
+            if isinstance(df, pd.Series):
+                df = df.to_frame()
+            if "Close" in df.columns:
+                close_data[t] = df["Close"].dropna()
         if not close_data:
             st.error("❌ No se pudieron extraer precios de cierre")
             return None
-        df = pd.DataFrame(close_data)
-        if df.empty:
-            st.error("❌ DataFrame vacío")
-            return None
-        df = df.ffill().bfill().dropna(how='all')
-        return df
+        df = pd.DataFrame(close_data).ffill().bfill().dropna(how='all')
+        return df if not df.empty else None
     except Exception as e:
         st.error(f"❌ Error procesando datos: {str(e)}")
         return None
@@ -205,25 +213,15 @@ def compute_weights(df, canary, risky, protective):
 def run_daa_keller(initial_capital, benchmark, start, end):
     ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
     data_dict = cached_download(ALL_TICKERS, start, end)
-if not data_dict:
-    return None
 
-for k, v in data_dict.items():
-    if isinstance(v, pd.Series):
-        data_dict[k] = v.to_frame()
+    # Convertir Series → DataFrame
+    for k, v in data_dict.items():
+        if isinstance(v, pd.Series):
+            data_dict[k] = v.to_frame()
 
-df = clean_and_align_data(data_dict)
-if df is None or df.empty:
-    return None
-
-# 👇 Aquí normalizamos Series → DataFrame
-for k, v in data_dict.items():
-    if isinstance(v, pd.Series):
-        data_dict[k] = v.to_frame()
-
-df = clean_and_align_data(data_dict)
-if df is None or df.empty:
-    return None
+    df = clean_and_align_data(data_dict)
+    if df is None or df.empty:
+        return None
 
     equity_curve = pd.Series(index=df.index, dtype=float)
     equity_curve.iloc[0] = initial_capital
@@ -294,12 +292,15 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
 
                 # === SEÑALES ===
                 st.subheader("📈 Señales de asignación")
-                today_df = download_all_tickers_conservative(
+                today_df = cached_download(
                     list(set(RISKY + PROTECTIVE + CANARY)),
                     datetime.today() - pd.DateOffset(months=13),
                     datetime.today()
                 )
                 if today_df:
+                    for k, v in today_df.items():
+                        if isinstance(v, pd.Series):
+                            today_df[k] = v.to_frame()
                     today_df = clean_and_align_data(today_df)
                     if today_df is not None and not today_df.empty:
                         weights_now = compute_weights(today_df, CANARY, RISKY, PROTECTIVE)
