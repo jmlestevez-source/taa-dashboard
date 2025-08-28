@@ -77,7 +77,7 @@ benchmark = st.sidebar.selectbox(
     index=0
 )
 
-# Función para descargar datos (ya funciona bien)
+# Función para descargar datos
 def download_all_tickers_conservative(tickers):
     """Descarga todos los tickers con enfoque conservador"""
     st.info(f"📊 Descargando datos para {len(tickers)} tickers...")
@@ -97,8 +97,7 @@ def download_all_tickers_conservative(tickers):
                 period="10y",
                 interval="1mo",
                 auto_adjust=True,
-                progress=False,
-                group_by='ticker'
+                progress=False
             )
             
             if data is not None and not data.empty:
@@ -129,23 +128,43 @@ def download_all_tickers_conservative(tickers):
     return data_dict
 
 def clean_and_align_data(data_dict):
-    """Convierte dict de datos a DataFrame alineado"""
+    """Convierte dict de datos a DataFrame alineado - CORREGIDO PARA MULTIINDEX"""
     if not data_dict:
         st.error("❌ No hay datos para procesar")
         return None
     
     try:
-        # Extraer solo 'Close' prices
+        # Extraer solo 'Close' prices - MANEJO CORRECTO DE MULTIINDEX
         close_data = {}
-        for ticker, df in data_dict.items():
-            if 'Close' in df.columns:
-                close_data[ticker] = df['Close']
-            else:
-                # Si hay múltiples columnas, buscar 'Close'
-                st.warning(f"🔍 Buscando 'Close' en {ticker}: columnas disponibles {list(df.columns)}")
-                close_data[ticker] = df.iloc[:, 0]  # Primer columna como fallback
         
-        if not close_data:
+        for ticker, df in data_dict.items():
+            # Verificar estructura de las columnas
+            st.info(f"🔍 Procesando {ticker}: tipo de columnas {type(df.columns)}")
+            
+            if isinstance(df.columns, pd.MultiIndex):
+                # Formato MultiIndex: ('SPY', 'Close')
+                if ('Close' in df.columns.get_level_values(1)) or (ticker in df.columns.get_level_values(0)):
+                    # Buscar la columna correcta
+                    for col in df.columns:
+                        if isinstance(col, tuple) and len(col) >= 2 and col[1] == 'Close':
+                            close_data[ticker] = df[col]
+                            break
+                    else:
+                        # Fallback: usar la primera columna si no encontramos 'Close'
+                        close_data[ticker] = df.iloc[:, 0]
+                        st.warning(f"⚠️ Usando primera columna para {ticker}")
+                else:
+                    close_data[ticker] = df.iloc[:, 0]  # Fallback
+                    st.warning(f"⚠️ Columnas no estándar para {ticker}: {df.columns.tolist()}")
+            else:
+                # Formato simple
+                if 'Close' in df.columns:
+                    close_data[ticker] = df['Close']
+                else:
+                    close_data[ticker] = df.iloc[:, 0]  # Fallback
+                    st.warning(f"⚠️ Usando primera columna para {ticker}")
+        
+        if not close_
             st.error("❌ No se pudieron extraer precios de cierre")
             return None
         
@@ -162,8 +181,8 @@ def clean_and_align_data(data_dict):
         # Eliminar columnas completamente vacías
         df = df.dropna(axis=1, how='all')
         
-        # Rellenar valores faltantes hacia adelante y hacia atrás
-        df = df.fillna(method='ffill').fillna(method='bfill')
+        # CORREGIDO: Usar ffill() y bfill() en lugar de fillna(method=...)
+        df = df.ffill().bfill()
         
         # Eliminar filas completamente vacías
         df = df.dropna(how='all')
@@ -177,6 +196,8 @@ def clean_and_align_data(data_dict):
         
     except Exception as e:
         st.error(f"❌ Error en procesamiento de datos: {str(e)}")
+        import traceback
+        st.code(traceback.format_exc())
         return None
 
 def momentum_score(df, symbol):
@@ -326,17 +347,13 @@ def run_daa_keller(initial_capital, benchmark):
             top_risky = sorted(risky_scores, key=risky_scores.get, reverse=True)[:6]
             weights = {r: 1.0 / 6 for r in top_risky}
         else:
-            # Fallback: mantener posición anterior o cash
-            weights = {}
-            if i > 1:
-                # Mantener pesos anteriores
-                pass
+            # Fallback: asignación igualitaria a riesgosos disponibles
+            available_risky = [r for r in RISKY if r in df.columns]
+            if available_risky:
+                top_risky = available_risky[:6]
+                weights = {r: 1.0 / len(top_risky) for r in top_risky}
             else:
-                # Primera iteración, asignar igualitario a riesgosos
-                if RISKY:
-                    available_risky = [r for r in RISKY if r in df.columns]
-                    if available_risky:
-                        weights = {r: 1.0 / len(available_risky) for r in available_risky[:6]}
+                weights = {}
         
         # Calcular retorno mensual
         monthly_return = 0
