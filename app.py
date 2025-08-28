@@ -9,6 +9,24 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import time
 import random
+import os, pickle
+
+CACHE_DIR = ".cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+def cached_download(tickers, start, end):
+    key = f"{sorted(tickers)}_{start}_{end}"
+    cache_path = os.path.join(CACHE_DIR, f"{hash(key)}.pkl")
+
+    if os.path.exists(cache_path):
+        st.info("📂 Cargando datos desde caché…")
+        with open(cache_path, "rb") as f:
+            return pickle.load(f)
+
+    data = download_all_tickers_conservative(tickers, start, end)
+    with open(cache_path, "wb") as f:
+        pickle.dump(data, f)
+    return data
 
 # 🔧 Configuración de la página
 st.set_page_config(
@@ -67,44 +85,36 @@ def create_robust_session():
 
 # === DESCARGA MEJORADA ===
 def download_all_tickers_conservative(tickers, start, end):
-    st.info(f"📊 Descargando {len(tickers)} tickers entre {start} y {end}...")
-    session = create_robust_session()
-    yf.utils.session = session
-    data_dict, errors = {}, []
+    st.info(f"📊 Descargando {len(tickers)} tickers entre {start} y {end}…")
+    import yfinance as yf
 
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    # 1) Descarga todo en un solo request (evita 429)
+    data = yf.download(
+        tickers=tickers,
+        start=start,
+        end=end,
+        interval="1mo",
+        auto_adjust=True,
+        threads=False,        # Yahoo bloquea hilos
+        progress=False,
+        timeout=30
+    )
 
-    for idx, ticker in enumerate(tickers):
-        status_text.text(f"📥 {ticker} ({idx+1}/{len(tickers)})")
-        for attempt in range(5):
-            try:
-                time.sleep(random.uniform(2, 4))
-                tk = yf.Ticker(ticker)
-                hist = tk.history(start=start, end=end, interval="1mo", auto_adjust=True, timeout=30)
-                if hist.empty:
-                    raise ValueError("Sin datos")
-                if "Close" not in hist.columns:
-                    raise KeyError("No tiene columna 'Close'")
-                hist.index = pd.to_datetime(hist.index)
-                hist.sort_index(inplace=True)
-                data_dict[ticker] = hist
-                st.success(f"✅ {ticker}")
-                break
-            except Exception as e:
-                st.warning(f"⚠️ {ticker} intento {attempt+1}: {str(e)[:50]}")
-                time.sleep(2 ** attempt + random.uniform(1, 3))
-        else:
-            errors.append(ticker)
-        progress_bar.progress((idx + 1) / len(tickers))
+    # 2) Re-ordenar a dict {ticker: DataFrame}
+    data_dict = {}
+    if isinstance(data.columns, pd.MultiIndex):
+        # Caso múltiples tickers
+        for t in tickers:
+            if ("Close", t) in data.columns:
+                df = data.xs(t, level=1, axis=1).dropna()
+                data_dict[t] = df
+    else:
+        # Caso 1 solo ticker
+        if "Close" in data.columns:
+            data_dict[tickers[0]] = data
 
-    progress_bar.empty()
-    status_text.empty()
-    if errors:
-        st.warning(f"❌ Errores: {', '.join(errors)}")
-    st.success(f"✅ Finalizado: {len(data_dict)} ok, {len(errors)} fallos")
+    st.success(f"✅ Descargados {len(data_dict)} tickers")
     return data_dict
-
 # === UTILS ===
 def clean_and_align_data(data_dict):
     if not data_dict:
@@ -175,7 +185,7 @@ def compute_weights(df, canary, risky, protective):
 # === ESTRATEGIA PRINCIPAL ===
 def run_daa_keller(initial_capital, benchmark, start, end):
     ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
-    data_dict = download_all_tickers_conservative(ALL_TICKERS, start, end)
+    data_dict = cached_download(ALL_TICKERS, start, end)
     if not data_dict:
         return None
     df = clean_and_align_data(data_dict)
