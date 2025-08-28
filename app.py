@@ -6,6 +6,27 @@ from datetime import datetime
 import requests
 import time
 import random
+import os
+import hashlib
+from pathlib import Path
+
+CACHE_DIR = Path("cache_fmp")
+CACHE_DIR.mkdir(exist_ok=True)
+
+def cache_key(ticker, start, end):
+    """Genera un nombre único según ticker + fechas"""
+    seed = f"{ticker}_{start.isoformat()}_{end.isoformat()}"
+    h = hashlib.md5(seed.encode()).hexdigest()
+    return CACHE_DIR / f"{ticker}_{h}.parquet"
+
+def cached_fmp_monthly(ticker, start, end):
+    file = cache_key(ticker, start, end)
+    if file.exists():
+        return pd.read_parquet(file)
+    df = fmp_monthly_prices(ticker, start, end)
+    if not df.empty:
+        df.to_parquet(file, index=True)
+    return df
 
 # 🔧 Config
 st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
@@ -65,7 +86,7 @@ def download_all_tickers_fmp(tickers, start, end):
     for idx, tk in enumerate(tickers):
         bar.progress((idx + 1) / len(tickers))
         try:
-            df = fmp_monthly_prices(tk, start, end)
+            df = cached_fmp_monthly(tk, start, end)
             if not df.empty:
                 data[tk] = df
         except Exception as e:
