@@ -4,6 +4,11 @@ import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime
 import yfinance as yf
+import time
+import random
+
+# Configurar yfinance con mejores opciones
+yf.set_tz_cache_limit(3600)  # Cache de 1 hora
 
 # Configuración de la página
 st.set_page_config(
@@ -92,6 +97,55 @@ def calculate_metrics(returns, initial_capital):
         "Sharpe Ratio": round(sharpe, 2)
     }
 
+def download_data_enhanced(tickers, start_date, end_date):
+    """Descarga datos con configuración mejorada"""
+    try:
+        # Configuración mejorada de yfinance
+        yf.pdr_override()
+        
+        # Intentar con diferentes configuraciones
+        configs = [
+            {"group_by": 'ticker', "auto_adjust": True},
+            {"group_by": 'ticker', "auto_adjust": False},
+            {"group_by": 'column'},
+            {}  # Configuración por defecto
+        ]
+        
+        for i, config in enumerate(configs):
+            try:
+                with st.spinner(f"📥 Intentando configuración {i+1}/4..."):
+                    data = yf.download(
+                        tickers, 
+                        start=start_date, 
+                        end=end_date,
+                        progress=False,
+                        **config
+                    )
+                    
+                    if not data.empty:
+                        # Manejar diferentes formatos de datos
+                        if isinstance(data, pd.DataFrame):
+                            if 'Adj Close' in data.columns:
+                                return data['Adj Close']
+                            elif len(data.columns) > 0:
+                                # Si hay múltiples columnas, asumir que es multiindex
+                                if isinstance(data.columns, pd.MultiIndex):
+                                    return data['Adj Close']
+                                else:
+                                    return data
+                        else:
+                            return data
+                            
+            except Exception as e:
+                st.warning(f"Configuración {i+1} falló: {str(e)[:50]}...")
+                time.sleep(1)  # Pequeña pausa entre intentos
+                
+        return None
+        
+    except Exception as e:
+        st.error(f"Error general en descarga: {str(e)}")
+        return None
+
 def run_daa_keller(initial_capital, start_date, end_date, benchmark):
     """Ejecuta la estrategia DAA KELLER"""
     # Definir activos
@@ -100,18 +154,52 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
     CANARY = ['EEM', 'AGG']
     ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
     
-    # Descargar datos
-    try:
-        with st.spinner("📥 Descargando datos históricos..."):
-            df = yf.download(ALL_TICKERS, start=start_date, end=end_date)['Adj Close']
-            df.dropna(inplace=True)
-    except Exception as e:
-        st.error(f"Error descargando datos: {str(e)}")
+    st.info(f"📊 Descargando datos para {len(ALL_TICKERS)} tickers: {', '.join(ALL_TICKERS)}")
+    
+    # Descargar datos con configuración mejorada
+    df = download_data_enhanced(ALL_TICKERS, start_date, end_date)
+    
+    if df is None or df.empty:
+        st.error("❌ No se pudieron obtener datos históricos")
+        st.info("💡 Probando descarga individual de tickers...")
+        
+        # Intentar descargar tickers individualmente
+        individual_data = {}
+        failed_tickers = []
+        
+        for ticker in ALL_TICKERS:
+            try:
+                with st.spinner(f"📥 Descargando {ticker}..."):
+                    ticker_data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+                    if not ticker_data.empty and 'Adj Close' in ticker_data.columns:
+                        individual_data[ticker] = ticker_data['Adj Close']
+                    else:
+                        failed_tickers.append(ticker)
+                    time.sleep(0.1)  # Pequeña pausa
+            except Exception as e:
+                st.warning(f"❌ {ticker}: {str(e)[:50]}...")
+                failed_tickers.append(ticker)
+        
+        if individual_data:
+            df = pd.DataFrame(individual_data)
+            st.success(f"✅ Descargados {len(individual_data)} tickers individualmente")
+            if failed_tickers:
+                st.warning(f"⚠️ No se pudieron descargar: {', '.join(failed_tickers)}")
+        else:
+            st.error("❌ No se pudo descargar ningún ticker")
+            return None
+    
+    # Limpiar datos
+    if df is not None and not df.empty:
+        df = df.dropna(axis=1, how='all')  # Eliminar columnas completamente vacías
+        df = df.fillna(method='ffill').fillna(method='bfill')  # Rellenar valores faltantes
+        df.dropna(inplace=True)
+    
+    if df is None or df.empty:
+        st.error("No se pudieron obtener datos históricos válidos")
         return None
     
-    if df.empty:
-        st.error("No se pudieron obtener datos históricos")
-        return None
+    st.success(f"✅ Datos descargados: {len(df.columns)} tickers, {len(df)} registros")
     
     # Resamplear a mensual
     monthly = df.resample('M').last()
