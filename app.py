@@ -92,10 +92,13 @@ def download_all_tickers_conservative(tickers, start, end):
     progress_bar = st.progress(0)
     status_text = st.empty()
 
+    # Descargar en lotes pequeños con pausas largas
     for idx, ticker in enumerate(tickers):
         status_text.text(f"📥 {ticker} ({idx+1}/{len(tickers)})")
         for attempt in range(5):
             try:
+                # Pausa larga antes de cada ticker
+                time.sleep(random.uniform(2, 4))
                 tk = yf.Ticker(ticker)
                 hist = tk.history(start=start, end=end, interval="1mo", auto_adjust=True, timeout=30)
                 if hist.empty:
@@ -109,7 +112,7 @@ def download_all_tickers_conservative(tickers, start, end):
                 break
             except Exception as e:
                 st.warning(f"⚠️ {ticker} intento {attempt+1}: {str(e)[:50]}")
-                time.sleep(2 ** attempt + random.uniform(0.5, 1.5))
+                time.sleep(2 ** attempt + random.uniform(1, 3))
         else:
             errors.append(ticker)
         progress_bar.progress((idx + 1) / len(tickers))
@@ -261,19 +264,26 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
         with st.spinner("Analizando..."):
             result = run_daa_keller(initial_capital, benchmark, start_date, end_date)
             if result:
+                st.subheader("📊 Métricas de la Estrategia")
                 col1, col2, col3 = st.columns(3)
                 col1.metric("📈 CAGR", f"{result['portfolio_metrics']['CAGR']}%")
                 col2.metric("🔻 Max Drawdown", f"{result['portfolio_metrics']['Max Drawdown']}%")
                 col3.metric("⭐ Sharpe Ratio", f"{result['portfolio_metrics']['Sharpe Ratio']}")
 
-                # Gráfico de equity
+                # 👇 Asegurado: métricas del benchmark
+                st.subheader("📊 Métricas del Benchmark")
+                col4, col5, col6 = st.columns(3)
+                col4.metric("📈 CAGR", f"{result['benchmark_metrics']['CAGR']}%")
+                col5.metric("🔻 Max Drawdown", f"{result['benchmark_metrics']['Max Drawdown']}%")
+                col6.metric("⭐ Sharpe Ratio", f"{result['benchmark_metrics']['Sharpe Ratio']}")
+
+                # Gráficos
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=result["dates"], y=result["portfolio"], name="Portfolio", line=dict(color="blue")))
                 fig.add_trace(go.Scatter(x=result["dates"], y=result["benchmark"], name=benchmark, line=dict(color="orange", dash="dash")))
                 fig.update_layout(height=500, xaxis_title="Fecha", yaxis_title="Valor ($)")
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Gráfico de drawdown en ROJO
                 dd = go.Figure()
                 dd.add_trace(go.Scatter(x=result["dates"], y=result["portfolio_drawdown"], fill='tozeroy', name="Portfolio Drawdown", line=dict(color="red")))
                 dd.add_trace(go.Scatter(x=result["dates"], y=result["benchmark_drawdown"], fill='tozeroy', name=f"{benchmark} Drawdown", line=dict(color="orange")))
