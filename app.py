@@ -70,14 +70,21 @@ def cached_fmp_monthly(ticker, start, end):
     file = cache_file(ticker)
     if file.exists():
         df = pd.read_parquet(file)
-        mask = (df.index >= start) & (df.index <= end)
+        # Convertimos start y end a datetime64 sin tz
+        start = pd.Timestamp(start).tz_localize(None)
+        end   = pd.Timestamp(end).tz_localize(None)
+        mask = (df.index.tz_localize(None) >= start) & (df.index.tz_localize(None) <= end)
         df_slice = df[mask]
         if not df_slice.empty:
             return df_slice
-    df = fmp_monthly_prices(ticker, datetime(2000, 1, 1), datetime.today())
+
+    # Descargar todo el rango posible
+    df = fmp_monthly_prices(ticker, datetime(2010, 1, 1), datetime.today())
     if not df.empty:
         df.to_parquet(file, index=True)
-        mask = (df.index >= start) & (df.index <= end)
+        start = pd.Timestamp(start).tz_localize(None)
+        end   = pd.Timestamp(end).tz_localize(None)
+        mask = (df.index.tz_localize(None) >= start) & (df.index.tz_localize(None) <= end)
         return df[mask]
     return pd.DataFrame()
 
