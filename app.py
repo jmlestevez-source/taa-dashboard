@@ -74,7 +74,7 @@ def cached_fmp_monthly(ticker, start, end):
         df_slice = df[mask]
         if not df_slice.empty:
             return df_slice
-    df = fmp_monthly_prices(ticker, datetime(2010, 1, 1), datetime.today())
+    df = fmp_monthly_prices(ticker, datetime(2000, 1, 1), datetime.today())
     if not df.empty:
         df.to_parquet(file, index=True)
         mask = (df.index >= start) & (df.index <= end)
