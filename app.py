@@ -2,11 +2,8 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from datetime import datetime
-import yfinance as yf
+from datetime import datetime, timedelta
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 import time
 import random
 
@@ -60,89 +57,53 @@ CANARY = [x.strip() for x in canary_assets.split(',') if x.strip()]
 
 benchmark = st.sidebar.selectbox("📈 Benchmark", ["SPY", "QQQ", "IWM"], index=0)
 
-# === SESIÓN ROBUSTA ===
-def create_robust_session():
-    user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
-    ]
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": random.choice(user_agents),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5",
-        "Connection": "keep-alive",
-        "Referer": "https://finance.yahoo.com/"
-    })
+API_KEY = "6cb32e81af450a825085ffeef279c5c2"
 
-    retries = Retry(total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-    return session
+# === DESCARGA DESDE FINANCIAL MODELLING PREP ===
+def fmp_monthly_prices(ticker, start, end):
+    url = (
+        f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?"
+        f"from={start.strftime('%Y-%m-%d')}&to={end.strftime('%Y-%m-%d')}&apikey={API_KEY}"
+    )
+    r = requests.get(url)
+    if r.status_code != 200:
+        return pd.DataFrame()
+    data = r.json()
+    if "historical" not in data:
+        return pd.DataFrame()
+    df = pd.DataFrame(data["historical"])
+    if "close" not in df.columns:
+        return pd.DataFrame()
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date")
+    df = df.set_index("date")
+    monthly = df["close"].resample("M").last()
+    monthly.name = ticker
+    return monthly.to_frame()
 
-# === DESCARGA MEJORADA ===
-def download_all_tickers_conservative(tickers, start, end):
-    st.info(f"📊 Descargando {len(tickers)} tickers entre {start} y {end}...")
-    session = create_robust_session()
-    yf.utils.session = session
-    data_dict = {}
-    errors = []
+def download_all_tickers_fmp(tickers, start, end):
+    st.info(f"📊 Descargando {len(tickers)} tickers entre {start} y {end} desde FMP...")
+    data = {}
+    progress = st.progress(0)
+    for idx, tk in enumerate(tickers):
+        progress.progress((idx + 1) / len(tickers))
+        try:
+            df = fmp_monthly_prices(tk, start, end)
+            if not df.empty:
+                data[tk] = df
+        except Exception as e:
+            st.warning(f"⚠️ Error con {tk}: {e}")
+        time.sleep(0.3)
+    progress.empty()
+    return {tk: df for tk, df in data.items() if not df.empty}
 
-    progress_bar = st.progress(0)
-    status_text = st.empty()
-
-    # Descargar en lotes pequeños con pausas largas
-    for idx, ticker in enumerate(tickers):
-        status_text.text(f"📥 {ticker} ({idx+1}/{len(tickers)})")
-        for attempt in range(5):
-            try:
-                # Pausa larga antes de cada ticker
-                time.sleep(random.uniform(2, 4))
-                tk = yf.Ticker(ticker)
-                hist = tk.history(start=start, end=end, interval="1mo", auto_adjust=True, timeout=30)
-                if hist.empty:
-                    raise ValueError("Sin datos")
-                if "Close" not in hist.columns:
-                    raise KeyError("No tiene columna 'Close'")
-                hist.index = pd.to_datetime(hist.index)
-                hist.sort_index(inplace=True)
-                data_dict[ticker] = hist
-                st.success(f"✅ {ticker}")
-                break
-            except Exception as e:
-                st.warning(f"⚠️ {ticker} intento {attempt+1}: {str(e)[:50]}")
-                time.sleep(2 ** attempt + random.uniform(1, 3))
-        else:
-            errors.append(ticker)
-        progress_bar.progress((idx + 1) / len(tickers))
-
-    progress_bar.empty()
-    status_text.empty()
-    if errors:
-        st.warning(f"❌ Errores: {', '.join(errors)}")
-    st.success(f"✅ Finalizado: {len(data_dict)} ok, {len(errors)} fallos")
-    return data_dict
-
-# === LIMPIEZA ===
 def clean_and_align_data(data_dict):
     if not data_dict:
         st.error("❌ No hay datos para procesar")
         return None
-    try:
-        close_data = {ticker: df["Close"] for ticker, df in data_dict.items() if "Close" in df.columns}
-        if not close_data:
-            st.error("❌ No se pudieron extraer precios de cierre")
-            return None
-        df = pd.DataFrame(close_data)
-        df = df.dropna(axis=1, how='all').fillna(method='ffill').fillna(method='bfill').dropna(how='all')
-        if df.empty:
-            st.error("❌ DataFrame limpio está vacío")
-            return None
-        return df
-    except Exception as e:
-        st.error(f"❌ Error procesando datos: {str(e)}")
-        return None
+    df = pd.concat([data_dict[ticker] for ticker in data_dict], axis=1)
+    df = df.dropna(axis=1, how='all').fillna(method='ffill').fillna(method='bfill').dropna(how='all')
+    return df
 
 # === MÉTRICAS ===
 def momentum_score(df, symbol):
@@ -184,7 +145,7 @@ def calculate_drawdown_series(equity_series):
 # === ESTRATEGIA ===
 def run_daa_keller(initial_capital, benchmark, start, end):
     ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
-    data_dict = download_all_tickers_conservative(ALL_TICKERS, start, end)
+    data_dict = download_all_tickers_fmp(ALL_TICKERS, start, end)
     if not data_dict:
         return None
     df = clean_and_align_data(data_dict)
@@ -194,15 +155,14 @@ def run_daa_keller(initial_capital, benchmark, start, end):
     equity_curve = pd.Series(index=df.index, dtype=float)
     equity_curve.iloc[0] = initial_capital
 
-    # Nueva lista para almacenar las señales
-    signals_history = []
-
     progress_bar = st.progress(0)
     total_months = len(df) - 1
 
+    # Historial de señales
+    signals_history = []
+
     for i in range(1, len(df)):
         prev_month = df.iloc[i - 1]
-        current_date = df.index[i] # Fecha de rebalanceo
         canary_scores = {s: momentum_score(df.iloc[:i], s) for s in CANARY if s in df.columns}
         risky_scores = {s: momentum_score(df.iloc[:i], s) for s in RISKY if s in df.columns}
         protective_scores = {s: momentum_score(df.iloc[:i], s) for s in PROTECTIVE if s in df.columns}
@@ -224,12 +184,6 @@ def run_daa_keller(initial_capital, benchmark, start, end):
         else:
             weights = {}
 
-        # Guardar las señales para este mes
-        signals_history.append({
-            'date': current_date,
-            'weights': weights.copy()
-        })
-
         monthly_return = 0
         for ticker, weight in weights.items():
             if ticker in df.columns and ticker in prev_month.index:
@@ -239,9 +193,36 @@ def run_daa_keller(initial_capital, benchmark, start, end):
                 except:
                     pass
         equity_curve.iloc[i] = equity_curve.iloc[i - 1] * (1 + monthly_return)
+        signals_history.append((df.index[i], weights))
         progress_bar.progress(int((i / total_months) * 100))
 
     progress_bar.empty()
+
+    # Señal mes anterior
+    last_month_date, last_weights = signals_history[-1]
+
+    # Señal actual (último día disponible)
+    now = df.index[-1]
+    canary_scores_now = {s: momentum_score(df, s) for s in CANARY if s in df.columns}
+    risky_scores_now = {s: momentum_score(df, s) for s in RISKY if s in df.columns}
+    protective_scores_now = {s: momentum_score(df, s) for s in PROTECTIVE if s in df.columns}
+
+    n_now = sum(1 for s in canary_scores_now.values() if s <= 0)
+
+    if n_now == 2 and protective_scores_now:
+        top_now = max(protective_scores_now, key=protective_scores_now.get)
+        current_weights = {top_now: 1.0}
+    elif n_now == 1 and protective_scores_now and risky_scores_now:
+        top_p_now = max(protective_scores_now, key=protective_scores_now.get)
+        top_r_now = sorted(risky_scores_now, key=risky_scores_now.get, reverse=True)[:6]
+        current_weights = {top_p_now: 0.5}
+        for r in top_r_now:
+            current_weights[r] = 0.5 / 6
+    elif risky_scores_now:
+        top_r_now = sorted(risky_scores_now, key=risky_scores_now.get, reverse=True)[:6]
+        current_weights = {r: 1.0 / 6 for r in top_r_now}
+    else:
+        current_weights = {}
 
     if benchmark in df.columns:
         benchmark_data = df[benchmark]
@@ -264,49 +245,9 @@ def run_daa_keller(initial_capital, benchmark, start, end):
         "benchmark_metrics": benchmark_metrics,
         "portfolio_drawdown": portfolio_drawdown,
         "benchmark_drawdown": benchmark_drawdown,
-        "signals_history": signals_history # Devolver el historial de señales
+        "last_month_signal": (last_month_date, last_weights),
+        "current_signal": (now, current_weights)
     }
-
-# === NUEVA FUNCIÓN: Obtener señales actuales ===
-def get_current_signals():
-    ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY))
-    # Descargar datos hasta hoy para calcular las señales actuales
-    end_date_today = datetime.today()
-    start_date_for_signals = datetime(end_date_today.year - 2, end_date_today.month, 1) # 2 años atrás
-    
-    st.info("🔄 Obteniendo señales actuales...")
-    data_dict = download_all_tickers_conservative(ALL_TICKERS, start_date_for_signals, end_date_today)
-    if not data_dict:
-        st.error("No se pudieron obtener datos para las señales actuales")
-        return None
-    df = clean_and_align_data(data_dict)
-    if df is None or df.empty:
-        st.error("No se pudieron procesar los datos para las señales actuales")
-        return None
-
-    # Usar todos los datos disponibles para calcular las puntuaciones actuales
-    canary_scores = {s: momentum_score(df, s) for s in CANARY if s in df.columns}
-    risky_scores = {s: momentum_score(df, s) for s in RISKY if s in df.columns}
-    protective_scores = {s: momentum_score(df, s) for s in PROTECTIVE if s in df.columns}
-
-    n = sum(1 for s in canary_scores.values() if s <= 0)
-
-    if n == 2 and protective_scores:
-        top = max(protective_scores, key=protective_scores.get)
-        weights = {top: 1.0}
-    elif n == 1 and protective_scores and risky_scores:
-        top_p = max(protective_scores, key=protective_scores.get)
-        top_r = sorted(risky_scores, key=risky_scores.get, reverse=True)[:6]
-        weights = {top_p: 0.5}
-        for r in top_r:
-            weights[r] = 0.5 / 6
-    elif risky_scores:
-        top_r = sorted(risky_scores, key=risky_scores.get, reverse=True)[:6]
-        weights = {r: 1.0 / 6 for r in top_r}
-    else:
-        weights = {}
-
-    return weights
 
 # === BOTÓN EJECUTAR ===
 if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
@@ -322,12 +263,22 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
                 col2.metric("🔻 Max Drawdown", f"{result['portfolio_metrics']['Max Drawdown']}%")
                 col3.metric("⭐ Sharpe Ratio", f"{result['portfolio_metrics']['Sharpe Ratio']}")
 
-                # 👇 Asegurado: métricas del benchmark
                 st.subheader("📊 Métricas del Benchmark")
                 col4, col5, col6 = st.columns(3)
                 col4.metric("📈 CAGR", f"{result['benchmark_metrics']['CAGR']}%")
                 col5.metric("🔻 Max Drawdown", f"{result['benchmark_metrics']['Max Drawdown']}%")
                 col6.metric("⭐ Sharpe Ratio", f"{result['benchmark_metrics']['Sharpe Ratio']}")
+
+                # Mostrar señales
+                st.subheader("📌 Señales de Inversión")
+
+                last_date, last_w = result["last_month_signal"]
+                st.write(f"**Último cierre del mes anterior ({last_date.date()})**")
+                st.json({k: f"{v*100:.2f}%" for k, v in last_w.items()})
+
+                cur_date, cur_w = result["current_signal"]
+                st.write(f"**Señal actual ({cur_date.date()})**")
+                st.json({k: f"{v*100:.2f}%" for k, v in cur_w.items()})
 
                 # Gráficos
                 fig = go.Figure()
@@ -341,34 +292,5 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
                 dd.add_trace(go.Scatter(x=result["dates"], y=result["benchmark_drawdown"], fill='tozeroy', name=f"{benchmark} Drawdown", line=dict(color="blue")))
                 dd.update_layout(height=400, xaxis_title="Fecha", yaxis_title="Drawdown (%)")
                 st.plotly_chart(dd, use_container_width=True)
-
-                # === NUEVA SECCIÓN: Mostrar señales ===
-                st.subheader("📡 Señales de Inversión")
-
-                # 1. Señales del cierre del mes anterior
-                if result['signals_history']:
-                    last_signal_date = result['signals_history'][-1]['date']
-                    last_weights = result['signals_history'][-1]['weights']
-                    
-                    st.markdown(f"**🗓️ Cierre del mes anterior ({last_signal_date.strftime('%Y-%m-%d')}):**")
-                    if last_weights:
-                        weights_df = pd.DataFrame.from_dict(last_weights, orient='index', columns=['Peso (%)'])
-                        weights_df['Peso (%)'] = (weights_df['Peso (%)'] * 100).round(2)
-                        weights_df.index.name = 'ETF'
-                        st.dataframe(weights_df)
-                    else:
-                        st.write("No hay asignación de pesos para esta fecha.")
-
-                # 2. Señales actuales (hoy)
-                current_weights = get_current_signals()
-                st.markdown(f"**📅 Fecha actual ({datetime.today().strftime('%Y-%m-%d')}):**")
-                if current_weights:
-                    current_weights_df = pd.DataFrame.from_dict(current_weights, orient='index', columns=['Peso (%)'])
-                    current_weights_df['Peso (%)'] = (current_weights_df['Peso (%)'] * 100).round(2)
-                    current_weights_df.index.name = 'ETF'
-                    st.dataframe(current_weights_df)
-                else:
-                    st.write("No se pudieron calcular las señales actuales.")
-
 else:
     st.info("👈 Configura los parámetros y ejecuta el análisis")
