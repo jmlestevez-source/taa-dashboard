@@ -6,7 +6,11 @@ from datetime import datetime
 import yfinance as yf
 import time
 import random
-import requests
+import logging
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 🔧 Configuración de la página (DEBE ser lo primero)
 st.set_page_config(
@@ -15,22 +19,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 🔧 Configurar yfinance con User-Agent personalizado
+# 🔧 Configurar yfinance con mejor enfoque
 try:
-    # Crear sesión con User-Agent moderno
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    })
-    
-    # Aplicar a yfinance
-    yf.utils.get_session = lambda: session
-    yf.shared._ERRORS = {}  # Limpiar errores previos
-    
-    st.success("✅ User-Agent personalizado configurado para yfinance")
-    yf.enable_debug_mode()
-except Exception as e:
-    st.warning(f"⚠️ No se pudo configurar User-Agent: {e}")
+    # Configurar yfinance para mejor rendimiento
+    yf.set_tz_cache_limit(3600)  # Cache de 1 hora
+    st.success("✅ yfinance configurado correctamente")
+except:
+    pass
 
 # Título y descripción
 st.title("🎯 Tactical Asset Allocation Dashboard")
@@ -95,129 +90,70 @@ benchmark = st.sidebar.selectbox(
     index=0
 )
 
-# Parámetros generales
-start_date = st.sidebar.date_input("📅 Fecha Inicio", datetime(2010, 1, 1))
-end_date = st.sidebar.date_input("📅 Fecha Fin", datetime.today())
-
-# Función para descargar con User-Agent y manejo de rate limit
-def download_with_custom_user_agent(ticker, start_date, end_date, attempt=1, max_retries=6):
-    """Descarga datos con User-Agent personalizado y manejo de rate limit"""
-    try:
-        # Añadir delay aleatorio
-        time.sleep(random.uniform(0.5, 2.0))
-        
-        # Convertir fechas
-        start_dt = datetime.combine(start_date, datetime.min.time())
-        end_dt = datetime.combine(end_date, datetime.max.time())
-        
-        # Usar Ticker con configuración específica
-        ticker_obj = yf.Ticker(ticker)
-        
-        # Descargar datos
-        data = ticker_obj.history(
-            start=start_dt,
-            end=end_dt,
-            interval='1d',
-            auto_adjust=True,
-            back_adjust=False,
-            repair=True,
-            keepna=False,
-            timeout=30
-        )
-        
-        if not data.empty:
-            st.success(f"✅ {ticker} descargado exitosamente")
-            return data['Close'] if 'Close' in data.columns else data.iloc[:, 0]
-        else:
-            st.warning(f"⚠️ {ticker} devolvió datos vacíos")
-            return None
-            
-    except Exception as e:
-        error_msg = str(e).lower()
-        
-        # Manejar rate limit
-        if any(keyword in error_msg for keyword in ['rate limit', 'too many requests', '429', 'blocked']):
-            if attempt < max_retries:
-                # Espera exponencial con máximo
-                wait_time = min((2 ** attempt) * random.uniform(15, 30), 120)
-                st.warning(f"⏳ Rate limit para {ticker}. Esperando {wait_time:.1f}s... (intento {attempt}/{max_retries})")
-                time.sleep(wait_time)
-                return download_with_custom_user_agent(ticker, start_date, end_date, attempt + 1, max_retries)
-            else:
-                st.error(f"❌ Rate limit persistente para {ticker}")
-                return None
-        
-        # Manejar timeouts
-        elif "timeout" in error_msg:
-            if attempt < max_retries:
-                wait_time = random.uniform(10, 20)
-                st.warning(f"⏰ Timeout para {ticker}. Reintentando en {wait_time:.1f}s...")
-                time.sleep(wait_time)
-                return download_with_custom_user_agent(ticker, start_date, end_date, attempt + 1, max_retries)
-            else:
-                st.error(f"❌ Timeout persistente para {ticker}")
-                return None
-        
-        # Otros errores
-        else:
-            if attempt < max_retries:
-                wait_time = random.uniform(3, 8)
-                st.warning(f"⚠️ Error con {ticker}: {str(e)[:50]}... Reintentando en {wait_time:.1f}s")
-                time.sleep(wait_time)
-                return download_with_custom_user_agent(ticker, start_date, end_date, attempt + 1, max_retries)
-            else:
-                st.error(f"❌ Error persistente para {ticker}: {str(e)[:100]}")
-                return None
-
-def download_tickers_with_user_agent(tickers, start_date, end_date):
-    """Descarga todos los tickers con User-Agent personalizado"""
-    individual_data = {}
-    failed_tickers = []
+# Función mejorada para descargar datos (basada en el código que funciona)
+def download_data_optimized(tickers: list, period: str = "10y") -> dict:
+    """Descarga datos optimizada basada en el ejemplo que funciona"""
+    st.info(f"📊 Descargando datos para {len(tickers)} tickers...")
+    data = {}
+    errors = []
     
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    total_tickers = len(tickers)
     for i, ticker in enumerate(tickers):
         try:
-            status_text.text(f"📥 Descargando {ticker} ({i+1}/{total_tickers})")
-            ticker_data = download_with_custom_user_agent(ticker, start_date, end_date)
+            status_text.text(f"📥 Descargando {ticker} ({i+1}/{len(tickers)})")
             
-            if ticker_data is not None and not ticker_data.empty:
-                individual_data[ticker] = ticker_data
+            # Usar el enfoque que funciona: period + interval mensual
+            df = yf.download(
+                ticker, 
+                period=period, 
+                interval="1mo", 
+                auto_adjust=True, 
+                progress=False,
+                group_by='ticker'
+            )
+            
+            if df is not None and not df.empty:
+                # Asegurarse de que el índice es de tipo datetime y ordenarlo
+                df.index = pd.to_datetime(df.index)
+                df.sort_index(inplace=True)
+                data[ticker] = df
+                st.success(f"✅ {ticker} descargado")
             else:
-                failed_tickers.append(ticker)
-                
-            # Pequeña pausa entre tickers
-            time.sleep(random.uniform(0.5, 1.5))
+                st.warning(f"⚠️ No se obtuvieron datos para {ticker}")
+                errors.append(ticker)
                 
         except Exception as e:
-            st.error(f"Error general con {ticker}: {str(e)}")
-            failed_tickers.append(ticker)
+            st.error(f"❌ Error al descargar {ticker}: {str(e)[:50]}")
+            errors.append(ticker)
         
-        progress_bar.progress((i + 1) / total_tickers)
+        # Pequeña pausa para no saturar la API
+        time.sleep(random.uniform(0.1, 0.3))
+        progress_bar.progress((i + 1) / len(tickers))
     
     progress_bar.empty()
     status_text.empty()
     
-    if individual_data:
-        df = pd.DataFrame(individual_data)
-        if failed_tickers:
-            st.warning(f"⚠️ No se pudieron descargar: {', '.join(failed_tickers)}")
-        return df
-    else:
-        return None
+    if errors:
+        st.warning(f"⚠️ Errores en: {', '.join(errors)}")
+    
+    st.success(f"✅ Descarga completada: {len(data)} exitosos, {len(errors)} errores")
+    return data
 
 def momentum_score(df, symbol):
     """Calcula el momentum score para un símbolo"""
-    if len(df) < 21:
+    if len(df) < 13:  # Necesitamos al menos 13 meses para 12M ROC
         return 0
     try:
-        p0 = float(df[symbol].iloc[-1])
-        p1 = float(df[symbol].iloc[-21] if len(df) >= 21 else df[symbol].iloc[0])
-        p3 = float(df[symbol].iloc[-63] if len(df) >= 63 else df[symbol].iloc[0])
-        p6 = float(df[symbol].iloc[-126] if len(df) >= 126 else df[symbol].iloc[0])
-        p12 = float(df[symbol].iloc[-252] if len(df) >= 252 else df[symbol].iloc[0])
+        # Ajustar cálculo para datos mensuales
+        p0 = float(df[symbol].iloc[-1])  # Último mes
+        p1 = float(df[symbol].iloc[-2] if len(df) >= 2 else df[symbol].iloc[0])   # 1 mes atrás
+        p3 = float(df[symbol].iloc[-4] if len(df) >= 4 else df[symbol].iloc[0])   # 3 meses atrás
+        p6 = float(df[symbol].iloc[-7] if len(df) >= 7 else df[symbol].iloc[0])   # 6 meses atrás
+        p12 = float(df[symbol].iloc[-13] if len(df) >= 13 else df[symbol].iloc[0]) # 12 meses atrás
+        
+        # Fórmula de momentum de Keller adaptada para datos mensuales
         return (12 * (p0 / p1)) + (4 * (p0 / p3)) + (2 * (p0 / p6)) + (p0 / p12) - 19
     except:
         return 0
@@ -239,7 +175,7 @@ def calculate_metrics(returns, initial_capital):
     
     # CAGR (anualizado correctamente)
     total_return = equity.iloc[-1] / equity.iloc[0] - 1
-    years = len(returns) / 252  # Años comerciales
+    years = len(returns) / 12  # Mensual -> anual
     cagr = (1 + total_return) ** (1/years) - 1 if years > 0 else 0
     
     # Max Drawdown
@@ -247,8 +183,8 @@ def calculate_metrics(returns, initial_capital):
     drawdown = (equity - running_max) / running_max
     max_drawdown = drawdown.min()
     
-    # Sharpe Ratio
-    sharpe = (returns.mean() / returns.std()) * np.sqrt(252) if returns.std() != 0 else 0
+    # Sharpe Ratio (mensual -> anual)
+    sharpe = (returns.mean() / returns.std()) * np.sqrt(12) if returns.std() != 0 else 0
     
     return {
         "CAGR": round(cagr * 100, 2),
@@ -262,10 +198,22 @@ def calculate_drawdown_series(equity_series):
     drawdown = (equity_series - running_max) / running_max * 100
     return drawdown
 
-def clean_and_align_data(df):
-    """Limpia y alinea los datos"""
-    if df is None or df.empty:
+def clean_and_align_data(data_dict):
+    """Convierte dict de datos a DataFrame alineado"""
+    if not data_dict:
         return None
+    
+    # Extraer solo 'Close' prices
+    close_data = {}
+    for ticker, df in data_dict.items():
+        if 'Close' in df.columns:
+            close_data[ticker] = df['Close']
+    
+    if not close_data:
+        return None
+    
+    # Crear DataFrame
+    df = pd.DataFrame(close_data)
     
     # Eliminar columnas completamente vacías
     df = df.dropna(axis=1, how='all')
@@ -278,46 +226,38 @@ def clean_and_align_data(df):
     
     return df
 
-def run_daa_keller(initial_capital, start_date, end_date, benchmark):
-    """Ejecuta la estrategia DAA KELLER"""
+def run_daa_keller(initial_capital, benchmark):
+    """Ejecuta la estrategia DAA KELLER con enfoque optimizado"""
     ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
     
-    st.info(f"📊 Descargando datos para {len(ALL_TICKERS)} tickers con User-Agent personalizado")
+    # Descargar datos con enfoque optimizado (10 años de datos mensuales)
+    data_dict = download_data_optimized(ALL_TICKERS, period="10y")
     
-    # Descargar datos con User-Agent
-    df = download_tickers_with_user_agent(ALL_TICKERS, start_date, end_date)
-    
-    if df is None or df.empty:
+    if not data_dict:
         st.error("❌ No se pudieron obtener datos históricos")
         return None
     
-    # Limpiar datos
-    df = clean_and_align_data(df)
+    # Convertir a DataFrame
+    df = clean_and_align_data(data_dict)
     
     if df is None or df.empty:
-        st.error("❌ No se pudieron limpiar los datos históricos")
+        st.error("❌ No se pudieron procesar los datos históricos")
         return None
     
-    st.success(f"✅ Datos descargados y limpiados: {len(df.columns)} tickers, {len(df)} registros")
-    
-    # Resamplear a mensual (corregido ME en lugar de M)
-    monthly = df.resample('ME').last()
-    if len(monthly) < 2:
-        st.error("Período demasiado corto para análisis mensual")
-        return None
+    st.success(f"✅ Datos procesados: {len(df.columns)} tickers, {len(df)} meses")
     
     # Inicializar equity curve
-    equity_curve = pd.Series(index=monthly.index, dtype=float)
+    equity_curve = pd.Series(index=df.index, dtype=float)
     equity_curve.iloc[0] = initial_capital
     
     # Barra de progreso
     progress_bar = st.progress(0)
     status_text = st.empty()
     
-    # Ejecutar estrategia
-    total_months = len(monthly) - 1
-    for i in range(1, len(monthly)):
-        prev_month = monthly.iloc[i - 1]
+    # Ejecutar estrategia mes a mes
+    total_months = len(df) - 1
+    for i in range(1, len(df)):
+        prev_month = df.iloc[i - 1]
         
         # Calcular momentum scores solo para tickers disponibles
         canary_scores = {}
@@ -325,23 +265,23 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
         protective_scores = {}
         
         for symbol in CANARY:
-            if symbol in monthly.columns:
+            if symbol in df.columns:
                 try:
-                    canary_scores[symbol] = momentum_score(monthly.iloc[:i], symbol)
+                    canary_scores[symbol] = momentum_score(df.iloc[:i], symbol)
                 except:
                     canary_scores[symbol] = 0
         
         for symbol in RISKY:
-            if symbol in monthly.columns:
+            if symbol in df.columns:
                 try:
-                    risky_scores[symbol] = momentum_score(monthly.iloc[:i], symbol)
+                    risky_scores[symbol] = momentum_score(df.iloc[:i], symbol)
                 except:
                     risky_scores[symbol] = 0
         
         for symbol in PROTECTIVE:
-            if symbol in monthly.columns:
+            if symbol in df.columns:
                 try:
-                    protective_scores[symbol] = momentum_score(monthly.iloc[:i], symbol)
+                    protective_scores[symbol] = momentum_score(df.iloc[:i], symbol)
                 except:
                     protective_scores[symbol] = 0
         
@@ -367,9 +307,9 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
         # Calcular retorno mensual
         monthly_return = 0
         for ticker, weight in weights.items():
-            if ticker in monthly.columns and ticker in prev_month.index:
+            if ticker in df.columns and ticker in prev_month.index:
                 try:
-                    price_ratio = monthly.iloc[i][ticker] / prev_month[ticker]
+                    price_ratio = df.iloc[i][ticker] / prev_month[ticker]
                     monthly_return += weight * (price_ratio - 1)
                 except:
                     pass
@@ -386,10 +326,8 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
     
     # Calcular benchmark
     if benchmark in df.columns:
-        benchmark_data = df[benchmark].resample('ME').last()
+        benchmark_data = df[benchmark]
         benchmark_equity = benchmark_data / benchmark_data.iloc[0] * initial_capital
-        # Alinear fechas
-        benchmark_equity = benchmark_equity.reindex(equity_curve.index, method='ffill')
     else:
         benchmark_equity = pd.Series(initial_capital, index=equity_curve.index)
     
@@ -417,7 +355,7 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
         "benchmark_drawdown": benchmark_drawdown
     }
 
-def run_combined_strategies(strategies, initial_capital, start_date, end_date, benchmark):
+def run_combined_strategies(strategies, initial_capital, benchmark):
     """Ejecuta análisis combinado de estrategias"""
     if not strategies:
         return None
@@ -426,7 +364,7 @@ def run_combined_strategies(strategies, initial_capital, start_date, end_date, b
     strategy_results = {}
     for strategy in strategies:
         if strategy == "DAA KELLER":
-            result = run_daa_keller(initial_capital, start_date, end_date, benchmark)
+            result = run_daa_keller(initial_capital, benchmark)
             if result:
                 strategy_results[strategy] = result
     
@@ -486,7 +424,7 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
     else:
         with st.spinner("Analizando estrategias..."):
             # Ejecutar análisis combinado
-            results = run_combined_strategies(strategies, initial_capital, start_date, end_date, benchmark)
+            results = run_combined_strategies(strategies, initial_capital, benchmark)
             
             if results:
                 # Mostrar métricas principales
@@ -674,7 +612,7 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
                     3. Rebalanceo mensual al cierre del último día del mes
                     """)
             else:
-                st.error("No se pudieron obtener resultados. Verifica las fechas y las estrategias seleccionadas.")
+                st.error("No se pudieron obtener resultados. Verifica las estrategias seleccionadas.")
 else:
     # Página de inicio
     st.info("👈 Configura los parámetros en la barra lateral y haz clic en 'Ejecutar Análisis'")
@@ -697,8 +635,7 @@ else:
     2. Selecciona las estrategias a analizar
     3. Modifica los activos si lo deseas
     4. Elige un benchmark de comparación
-    5. Establece el período de análisis
-    6. Haz clic en "Ejecutar Análisis"
+    5. Haz clic en "Ejecutar Análisis"
     """)
 
 # Footer
