@@ -52,12 +52,15 @@ def momentum_score(df, symbol):
     """Calcula el momentum score para un símbolo"""
     if len(df) < 21:
         return 0
-    p0 = df[symbol].iloc[-1]
-    p1 = df[symbol].iloc[-21] if len(df) >= 21 else df[symbol].iloc[0]
-    p3 = df[symbol].iloc[-63] if len(df) >= 63 else df[symbol].iloc[0]
-    p6 = df[symbol].iloc[-126] if len(df) >= 126 else df[symbol].iloc[0]
-    p12 = df[symbol].iloc[-252] if len(df) >= 252 else df[symbol].iloc[0]
-    return (12 * (p0 / p1)) + (4 * (p0 / p3)) + (2 * (p0 / p6)) + (p0 / p12) - 19
+    try:
+        p0 = float(df[symbol].iloc[-1])
+        p1 = float(df[symbol].iloc[-21] if len(df) >= 21 else df[symbol].iloc[0])
+        p3 = float(df[symbol].iloc[-63] if len(df) >= 63 else df[symbol].iloc[0])
+        p6 = float(df[symbol].iloc[-126] if len(df) >= 126 else df[symbol].iloc[0])
+        p12 = float(df[symbol].iloc[-252] if len(df) >= 252 else df[symbol].iloc[0])
+        return (12 * (p0 / p1)) + (4 * (p0 / p3)) + (2 * (p0 / p6)) + (p0 / p12) - 19
+    except:
+        return 0
 
 def calculate_metrics(returns, initial_capital):
     """Calcula métricas de rendimiento"""
@@ -93,45 +96,42 @@ def calculate_metrics(returns, initial_capital):
         "Sharpe Ratio": round(sharpe, 2)
     }
 
-def download_data_robust(tickers, start_date, end_date):
-    """Descarga datos con enfoque robusto"""
-    try:
-        st.info("📥 Intentando descarga masiva...")
-        
-        # Intento 1: Descarga masiva estándar
-        data = yf.download(
-            tickers, 
-            start=start_date, 
-            end=end_date,
-            progress=False,
-            group_by='ticker'
-        )
-        
-        if not data.empty:
-            # Manejar formato MultiIndex
-            if isinstance(data.columns, pd.MultiIndex):
-                # Extraer solo 'Adj Close'
-                adj_close_data = {}
-                for ticker in tickers:
-                    if ticker in data.columns.levels[0]:
-                        adj_close_data[ticker] = data[ticker]['Adj Close']
-                return pd.DataFrame(adj_close_data)
-            else:
-                # Formato simple
+def download_single_ticker(ticker, start_date, end_date):
+    """Descarga un solo ticker con manejo de errores robusto"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # Configuración específica para evitar errores de zona horaria
+            data = yf.download(
+                ticker, 
+                start=start_date, 
+                end=end_date,
+                progress=False,
+                threads=False,  # Desactivar threads para evitar problemas
+                proxy=None,
+                rounding=False
+            )
+            
+            if not data.empty:
                 if 'Adj Close' in data.columns:
                     return data['Adj Close']
+                elif len(data.columns) > 0:
+                    # Si hay múltiples columnas, tomar la primera
+                    return data.iloc[:, 0]
                 else:
                     return data
-                    
-    except Exception as e:
-        st.warning(f"Descarga masiva falló: {str(e)[:100]}")
+            
+        except Exception as e:
+            st.warning(f"Intento {attempt + 1} para {ticker} falló: {str(e)[:50]}")
+            if attempt < max_retries - 1:
+                time.sleep(2)  # Esperar antes de reintentar
     
-    # Si falla, intentar descarga individual
-    st.info("🔄 Intentando descarga individual...")
-    return download_individual_tickers(tickers, start_date, end_date)
+    return None
 
-def download_individual_tickers(tickers, start_date, end_date):
-    """Descarga tickers individualmente"""
+def download_data_timezone_fix(tickers, start_date, end_date):
+    """Descarga datos con solución para errores de zona horaria"""
+    st.info("🔄 Descargando datos con solución de zona horaria...")
+    
     individual_data = {}
     failed_tickers = []
     
@@ -141,46 +141,41 @@ def download_individual_tickers(tickers, start_date, end_date):
     for i, ticker in enumerate(tickers):
         try:
             status_text.text(f"📥 Descargando {ticker} ({i+1}/{len(tickers)})")
-            ticker_data = yf.download(ticker, start=start_date, end=end_date, progress=False)
+            ticker_data = download_single_ticker(ticker, start_date, end_date)
             
-            if not ticker_data.empty:
-                if 'Adj Close' in ticker_data.columns:
-                    individual_data[ticker] = ticker_data['Adj Close']
-                else:
-                    # Usar 'Close' si 'Adj Close' no está disponible
-                    individual_data[ticker] = ticker_data['Close']
+            if ticker_data is not None and not ticker_data.empty:
+                individual_data[ticker] = ticker_data
             else:
                 failed_tickers.append(ticker)
                 
         except Exception as e:
-            st.warning(f"❌ {ticker} falló: {str(e)[:50]}")
+            st.warning(f"❌ {ticker} error: {str(e)[:50]}")
             failed_tickers.append(ticker)
         
-        # Pequeña pausa para evitar problemas de rate limiting
-        time.sleep(0.1)
         progress_bar.progress((i + 1) / len(tickers))
+        time.sleep(0.1)  # Pequeña pausa entre descargas
     
     progress_bar.empty()
     status_text.empty()
     
     if individual_data:
         df = pd.DataFrame(individual_data)
-        st.success(f"✅ Descargados {len(individual_data)} tickers individualmente")
+        st.success(f"✅ Descargados {len(individual_data)} tickers")
         if failed_tickers:
             st.warning(f"⚠️ No se pudieron descargar: {', '.join(failed_tickers)}")
         return df
     else:
         return None
 
-def clean_data(df):
-    """Limpia y prepara los datos"""
+def clean_and_align_data(df):
+    """Limpia y alinea los datos"""
     if df is None or df.empty:
         return None
     
     # Eliminar columnas completamente vacías
     df = df.dropna(axis=1, how='all')
     
-    # Rellenar valores faltantes
+    # Rellenar valores faltantes hacia adelante y hacia atrás
     df = df.fillna(method='ffill').fillna(method='bfill')
     
     # Eliminar filas completamente vacías
@@ -196,17 +191,17 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
     CANARY = ['EEM', 'AGG']
     ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
     
-    st.info(f"📊 Descargando datos para {len(ALL_TICKERS)} tickers: {', '.join(ALL_TICKERS)}")
+    st.info(f"📊 Descargando datos para {len(ALL_TICKERS)} tickers")
     
-    # Descargar datos con enfoque robusto
-    df = download_data_robust(ALL_TICKERS, start_date, end_date)
+    # Descargar datos con solución de zona horaria
+    df = download_data_timezone_fix(ALL_TICKERS, start_date, end_date)
     
     if df is None or df.empty:
         st.error("❌ No se pudieron obtener datos históricos")
         return None
     
-    # Limpiar datos
-    df = clean_data(df)
+    # Limpiar y alinear datos
+    df = clean_and_align_data(df)
     
     if df is None or df.empty:
         st.error("❌ No se pudieron limpiar los datos históricos")
@@ -232,15 +227,6 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
     total_months = len(monthly) - 1
     for i in range(1, len(monthly)):
         prev_month = monthly.iloc[i - 1]
-        
-        # Verificar que todos los tickers necesarios tengan datos
-        required_tickers = set(RISKY + PROTECTIVE + CANARY)
-        available_tickers = set(monthly.columns)
-        missing_tickers = required_tickers - available_tickers
-        
-        if missing_tickers:
-            st.warning(f"Faltan tickers en el mes {i}: {missing_tickers}")
-            # Continuar con los tickers disponibles
         
         # Calcular momentum scores solo para tickers disponibles
         canary_scores = {}
@@ -284,7 +270,7 @@ def run_daa_keller(initial_capital, start_date, end_date, benchmark):
             top_risky = sorted(risky_scores, key=risky_scores.get, reverse=True)[:6]
             weights = {r: 1.0 / 6 for r in top_risky}
         else:
-            # Fallback: mantener posición anterior o cash
+            # Fallback: mantener posición anterior
             weights = {}
         
         # Calcular retorno mensual
