@@ -7,6 +7,7 @@ import requests
 import time
 import random
 import os
+os.environ["STREAMLIT_WATCHDOG"] = "false"
 from pathlib import Path
 
 # 🔧 Configuración de la página
