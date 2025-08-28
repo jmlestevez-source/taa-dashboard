@@ -122,7 +122,7 @@ def clean_and_align_data(data_dict):
         return None
     try:
         close_data = {t: df["Close"] for t, df in data_dict.items() if "Close" in df.columns}
-        df = pd.DataFrame(close_data).dropna(axis=1, how='all').fillna(method='ffill').fillna(method='bfill').dropna(how='all')
+        df = df.dropna(axis=1, how='all').ffill().bfill().dropna(how='all')
         return df if not df.empty else None
     except Exception as e:
         st.error(f"❌ Error procesando datos: {str(e)}")
@@ -262,11 +262,11 @@ if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
 
                 # === SEÑALES ===
                 st.subheader("📈 Señales de asignación")
-                today_df = download_all_tickers_conservative(
-                    list(set(RISKY + PROTECTIVE + CANARY)),
-                    start_date=datetime.today() - pd.DateOffset(months=13),
-                    end_date=datetime.today()
-                )
+               today_df = download_all_tickers_conservative(
+    list(set(RISKY + PROTECTIVE + CANARY)),
+    datetime.today() - pd.DateOffset(months=13),
+    datetime.today()
+)
                 if today_df:
                     today_df = clean_and_align_data(today_df)
                     if today_df is not None and not today_df.empty:
