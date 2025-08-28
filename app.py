@@ -97,7 +97,8 @@ def download_all_tickers_conservative(tickers):
                 period="10y",
                 interval="1mo",
                 auto_adjust=True,
-                progress=False
+                progress=False,
+                group_by='ticker'
             )
             
             if data is not None and not data.empty:
@@ -138,33 +139,30 @@ def clean_and_align_data(data_dict):
         close_data = {}
         
         for ticker, df in data_dict.items():
-            # Verificar estructura de las columnas
+            # Verificar la estructura de las columnas
             st.info(f"🔍 Procesando {ticker}: tipo de columnas {type(df.columns)}")
             
             if isinstance(df.columns, pd.MultiIndex):
                 # Formato MultiIndex: ('SPY', 'Close')
-                if ('Close' in df.columns.get_level_values(1)) or (ticker in df.columns.get_level_values(0)):
-                    # Buscar la columna correcta
-                    for col in df.columns:
-                        if isinstance(col, tuple) and len(col) >= 2 and col[1] == 'Close':
-                            close_data[ticker] = df[col]
-                            break
-                    else:
-                        # Fallback: usar la primera columna si no encontramos 'Close'
-                        close_data[ticker] = df.iloc[:, 0]
-                        st.warning(f"⚠️ Usando primera columna para {ticker}")
+                if ('Close' in df.columns.levels[1]):
+                    close_data[ticker] = df[ticker]['Close']
+                elif ('Adj Close' in df.columns.levels[1]):
+                    close_data[ticker] = df[ticker]['Adj Close']
                 else:
-                    close_data[ticker] = df.iloc[:, 0]  # Fallback
-                    st.warning(f"⚠️ Columnas no estándar para {ticker}: {df.columns.tolist()}")
+                    # Tomar la primera columna como fallback
+                    close_data[ticker] = df.iloc[:, 0]
+                    st.warning(f"⚠️ Usando primera columna para {ticker}")
             else:
                 # Formato simple
                 if 'Close' in df.columns:
                     close_data[ticker] = df['Close']
+                elif 'Adj Close' in df.columns:
+                    close_data[ticker] = df['Adj Close']
                 else:
-                    close_data[ticker] = df.iloc[:, 0]  # Fallback
+                    close_data[ticker] = df.iloc[:, 0]
                     st.warning(f"⚠️ Usando primera columna para {ticker}")
         
-        if not close_:
+        if not close_
             st.error("❌ No se pudieron extraer precios de cierre")
             return None
         
@@ -181,7 +179,7 @@ def clean_and_align_data(data_dict):
         # Eliminar columnas completamente vacías
         df = df.dropna(axis=1, how='all')
         
-        # CORREGIDO: Usar ffill() y bfill() en lugar de fillna(method=...)
+        # Rellenar valores faltantes - CORREGIDO: usar ffill() y bfill()
         df = df.ffill().bfill()
         
         # Eliminar filas completamente vacías
@@ -347,7 +345,7 @@ def run_daa_keller(initial_capital, benchmark):
             top_risky = sorted(risky_scores, key=risky_scores.get, reverse=True)[:6]
             weights = {r: 1.0 / 6 for r in top_risky}
         else:
-            # Fallback: asignación igualitaria a riesgosos disponibles
+            # Fallback: asignar igualitario a riesgosos disponibles
             available_risky = [r for r in RISKY if r in df.columns]
             if available_risky:
                 top_risky = available_risky[:6]
