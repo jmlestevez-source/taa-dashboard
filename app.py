@@ -10,21 +10,20 @@ from urllib3.util.retry import Retry
 import time
 import random
 
-# 🔧 Configuración de la página (DEBE ser lo primero)
+# 🔧 Configuración de la página
 st.set_page_config(
     page_title="🎯 TAA Dashboard",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Título y descripción
 st.title("🎯 Tactical Asset Allocation Dashboard")
 st.markdown("Análisis de estrategias de inversión rotacionales")
 
-# Sidebar
+# === SIDEBAR ===
 st.sidebar.header("⚙️ Configuración")
 
-# Campo para capital inicial
+# Capital inicial
 initial_capital = st.sidebar.number_input(
     "💰 Capital Inicial ($)",
     min_value=1000,
@@ -33,88 +32,58 @@ initial_capital = st.sidebar.number_input(
     step=1000
 )
 
-# Selector de estrategias
+# Selección de fechas
+st.sidebar.subheader("📅 Rango de Backtest")
+start_date = st.sidebar.date_input("Fecha de inicio", value=datetime(2015, 1, 1))
+end_date = st.sidebar.date_input("Fecha de fin", value=datetime.today())
+
+# Estrategias
 strategies = st.sidebar.multiselect(
     "📊 Selecciona Estrategias",
     ["DAA KELLER"],
     ["DAA KELLER"]
 )
 
-# Parámetros de activos para DAA KELLER (editable)
+# Activos
 st.sidebar.subheader("🛠️ Configuración DAA KELLER")
-
 RISKY_DEFAULT = ['SPY', 'IWM', 'QQQ', 'VGK', 'EWJ', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'HYG', 'LQD']
 PROTECTIVE_DEFAULT = ['SHY', 'IEF', 'LQD']
 CANARY_DEFAULT = ['EEM', 'AGG']
 
-risky_assets = st.sidebar.text_area(
-    "Activos de Riesgo (separados por comas)",
-    value=','.join(RISKY_DEFAULT),
-    height=100
-)
+risky_assets = st.sidebar.text_area("Activos de Riesgo", value=','.join(RISKY_DEFAULT), height=100)
+protective_assets = st.sidebar.text_area("Activos Defensivos", value=','.join(PROTECTIVE_DEFAULT), height=60)
+canary_assets = st.sidebar.text_area("Activos Canarios", value=','.join(CANARY_DEFAULT), height=60)
 
-protective_assets = st.sidebar.text_area(
-    "Activos Defensivos (separados por comas)",
-    value=','.join(PROTECTIVE_DEFAULT),
-    height=60
-)
+RISKY = [x.strip() for x in risky_assets.split(',') if x.strip()]
+PROTECTIVE = [x.strip() for x in protective_assets.split(',') if x.strip()]
+CANARY = [x.strip() for x in canary_assets.split(',') if x.strip()]
 
-canary_assets = st.sidebar.text_area(
-    "Activos Canarios (separados por comas)",
-    value=','.join(CANARY_DEFAULT),
-    height=60
-)
-
-# Convertir texto a listas
-try:
-    RISKY = [x.strip() for x in risky_assets.split(',') if x.strip()]
-    PROTECTIVE = [x.strip() for x in protective_assets.split(',') if x.strip()]
-    CANARY = [x.strip() for x in canary_assets.split(',') if x.strip()]
-except:
-    RISKY, PROTECTIVE, CANARY = RISKY_DEFAULT, PROTECTIVE_DEFAULT, CANARY_DEFAULT
-
-# Selector de benchmark
-benchmark = st.sidebar.selectbox(
-    "📈 Benchmark",
-    ["SPY", "QQQ", "IWM"],
-    index=0
-)
+benchmark = st.sidebar.selectbox("📈 Benchmark", ["SPY", "QQQ", "IWM"], index=0)
 
 # === SESIÓN ROBUSTA ===
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-
 def create_robust_session():
     user_agents = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/125.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
     ]
     session = requests.Session()
     session.headers.update({
         "User-Agent": random.choice(user_agents),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
-        "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
         "Referer": "https://finance.yahoo.com/"
     })
 
-    retries = Retry(
-        total=5,
-        backoff_factor=1,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=frozenset(['GET', 'POST'])
-    )
+    retries = Retry(total=5, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
     adapter = HTTPAdapter(max_retries=retries)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
 
-# === FUNCIÓN DE DESCARGA MEJORADA ===
-def download_all_tickers_conservative(tickers):
-    st.info(f"📊 Descargando {len(tickers)} tickers con sesión robusta...")
+# === DESCARGA MEJORADA ===
+def download_all_tickers_conservative(tickers, start, end):
+    st.info(f"📊 Descargando {len(tickers)} tickers entre {start} y {end}...")
     session = create_robust_session()
     yf.utils.session = session
     data_dict = {}
@@ -125,30 +94,24 @@ def download_all_tickers_conservative(tickers):
 
     for idx, ticker in enumerate(tickers):
         status_text.text(f"📥 {ticker} ({idx+1}/{len(tickers)})")
-        max_retries = 5
-        for attempt in range(max_retries):
+        for attempt in range(5):
             try:
                 tk = yf.Ticker(ticker)
-                hist = tk.history(period="10y", interval="1mo", auto_adjust=True, timeout=30)
-
+                hist = tk.history(start=start, end=end, interval="1mo", auto_adjust=True, timeout=30)
                 if hist.empty:
                     raise ValueError("Sin datos")
                 if "Close" not in hist.columns:
                     raise KeyError("No tiene columna 'Close'")
-
                 hist.index = pd.to_datetime(hist.index)
                 hist.sort_index(inplace=True)
                 data_dict[ticker] = hist
                 st.success(f"✅ {ticker}")
                 break
-
             except Exception as e:
                 st.warning(f"⚠️ {ticker} intento {attempt+1}: {str(e)[:50]}")
-                if attempt < max_retries - 1:
-                    wait = (2 ** attempt) + random.uniform(0.5, 1.5)
-                    time.sleep(wait)
-                else:
-                    errors.append(ticker)
+                time.sleep(2 ** attempt + random.uniform(0.5, 1.5))
+        else:
+            errors.append(ticker)
         progress_bar.progress((idx + 1) / len(tickers))
 
     progress_bar.empty()
@@ -158,19 +121,13 @@ def download_all_tickers_conservative(tickers):
     st.success(f"✅ Finalizado: {len(data_dict)} ok, {len(errors)} fallos")
     return data_dict
 
-# === RESTO DEL CÓDIGO ===
+# === LIMPIEZA ===
 def clean_and_align_data(data_dict):
     if not data_dict:
         st.error("❌ No hay datos para procesar")
         return None
     try:
-        close_data = {}
-        for ticker, df in data_dict.items():
-            if "Close" in df.columns:
-                close_data[ticker] = df["Close"]
-            else:
-                st.warning(f"⚠️ {ticker} no tiene columna 'Close'")
-                continue
+        close_data = {ticker: df["Close"] for ticker, df in data_dict.items() if "Close" in df.columns}
         if not close_data:
             st.error("❌ No se pudieron extraer precios de cierre")
             return None
@@ -179,12 +136,12 @@ def clean_and_align_data(data_dict):
         if df.empty:
             st.error("❌ DataFrame limpio está vacío")
             return None
-        st.success(f"✅ Datos limpios: {len(df)} filas, {len(df.columns)} columnas")
         return df
     except Exception as e:
         st.error(f"❌ Error procesando datos: {str(e)}")
         return None
 
+# === MÉTRICAS ===
 def momentum_score(df, symbol):
     if len(df) < 13:
         return 0
@@ -194,10 +151,8 @@ def momentum_score(df, symbol):
         p3 = float(df[symbol].iloc[-4])
         p6 = float(df[symbol].iloc[-7])
         p12 = float(df[symbol].iloc[-13])
-        score = (12 * (p0 / p1)) + (4 * (p0 / p3)) + (2 * (p0 / p6)) + (p0 / p12) - 19
-        return score
-    except Exception as e:
-        st.warning(f"⚠️ Error calculando momentum para {symbol}: {str(e)[:30]}")
+        return (12 * (p0 / p1)) + (4 * (p0 / p3)) + (2 * (p0 / p6)) + (p0 / p12) - 19
+    except Exception:
         return 0
 
 def calculate_metrics(returns, initial_capital):
@@ -213,36 +168,30 @@ def calculate_metrics(returns, initial_capital):
     cagr = (1 + total_return) ** (1 / years) - 1 if years > 0 else 0
     running_max = equity.expanding().max()
     drawdown = (equity - running_max) / running_max
-    max_drawdown = drawdown.min()
-    sharpe = (returns.mean() / returns.std()) * np.sqrt(12) if returns.std() != 0 else 0
     return {
         "CAGR": round(cagr * 100, 2),
-        "Max Drawdown": round(max_drawdown * 100, 2),
-        "Sharpe Ratio": round(sharpe, 2)
+        "Max Drawdown": round(drawdown.min() * 100, 2),
+        "Sharpe Ratio": round((returns.mean() / returns.std()) * np.sqrt(12), 2) if returns.std() != 0 else 0
     }
 
 def calculate_drawdown_series(equity_series):
     running_max = equity_series.expanding().max()
-    drawdown = (equity_series - running_max) / running_max * 100
-    return drawdown
+    return (equity_series - running_max) / running_max * 100
 
-def run_daa_keller(initial_capital, benchmark):
+# === ESTRATEGIA ===
+def run_daa_keller(initial_capital, benchmark, start, end):
     ALL_TICKERS = list(set(RISKY + PROTECTIVE + CANARY + [benchmark]))
-    data_dict = download_all_tickers_conservative(ALL_TICKERS)
+    data_dict = download_all_tickers_conservative(ALL_TICKERS, start, end)
     if not data_dict:
-        st.error("❌ No se pudieron obtener datos")
         return None
     df = clean_and_align_data(data_dict)
     if df is None or df.empty:
-        st.error("❌ No se pudieron procesar datos")
         return None
-    st.success(f"✅ Datos procesados: {len(df.columns)} tickers, {len(df)} meses")
 
     equity_curve = pd.Series(index=df.index, dtype=float)
     equity_curve.iloc[0] = initial_capital
 
     progress_bar = st.progress(0)
-    status_text = st.empty()
     total_months = len(df) - 1
 
     for i in range(1, len(df)):
@@ -277,13 +226,9 @@ def run_daa_keller(initial_capital, benchmark):
                 except:
                     pass
         equity_curve.iloc[i] = equity_curve.iloc[i - 1] * (1 + monthly_return)
-
         progress_bar.progress(int((i / total_months) * 100))
-        if i % 10 == 0:
-            status_text.text(f"📊 Procesando mes {i} de {total_months}")
 
     progress_bar.empty()
-    status_text.empty()
 
     if benchmark in df.columns:
         benchmark_data = df[benchmark]
@@ -302,50 +247,36 @@ def run_daa_keller(initial_capital, benchmark):
         "dates": equity_curve.index,
         "portfolio": equity_curve,
         "benchmark": benchmark_equity,
-        "portfolio_returns": portfolio_returns,
-        "benchmark_returns": benchmark_returns,
         "portfolio_metrics": portfolio_metrics,
         "benchmark_metrics": benchmark_metrics,
         "portfolio_drawdown": portfolio_drawdown,
         "benchmark_drawdown": benchmark_drawdown
     }
 
-def run_combined_strategies(strategies, initial_capital, benchmark):
-    if not strategies:
-        return None
-    strategy_results = {}
-    for strategy in strategies:
-        if strategy == "DAA KELLER":
-            result = run_daa_keller(initial_capital, benchmark)
-            if result:
-                strategy_results[strategy] = result
-    if not strategy_results:
-        return None
-    return {"individual_results": strategy_results}
-
-# Botón de ejecución
+# === BOTÓN EJECUTAR ===
 if st.sidebar.button("🚀 Ejecutar Análisis", type="primary"):
     if not strategies:
         st.warning("Selecciona al menos una estrategia")
     else:
         with st.spinner("Analizando..."):
-            results = run_combined_strategies(strategies, initial_capital, benchmark)
-            if results:
-                res = results["individual_results"]["DAA KELLER"]
+            result = run_daa_keller(initial_capital, benchmark, start_date, end_date)
+            if result:
                 col1, col2, col3 = st.columns(3)
-                col1.metric("📈 CAGR", f"{res['portfolio_metrics']['CAGR']}%")
-                col2.metric("🔻 Max Drawdown", f"{res['portfolio_metrics']['Max Drawdown']}%")
-                col3.metric("⭐ Sharpe Ratio", f"{res['portfolio_metrics']['Sharpe Ratio']}")
+                col1.metric("📈 CAGR", f"{result['portfolio_metrics']['CAGR']}%")
+                col2.metric("🔻 Max Drawdown", f"{result['portfolio_metrics']['Max Drawdown']}%")
+                col3.metric("⭐ Sharpe Ratio", f"{result['portfolio_metrics']['Sharpe Ratio']}")
 
+                # Gráfico de equity
                 fig = go.Figure()
-                fig.add_trace(go.Scatter(x=res["dates"], y=res["portfolio"], name="Portfolio", line=dict(color="blue")))
-                fig.add_trace(go.Scatter(x=res["dates"], y=res["benchmark"], name=benchmark, line=dict(color="orange", dash="dash")))
+                fig.add_trace(go.Scatter(x=result["dates"], y=result["portfolio"], name="Portfolio", line=dict(color="blue")))
+                fig.add_trace(go.Scatter(x=result["dates"], y=result["benchmark"], name=benchmark, line=dict(color="orange", dash="dash")))
                 fig.update_layout(height=500, xaxis_title="Fecha", yaxis_title="Valor ($)")
                 st.plotly_chart(fig, use_container_width=True)
 
+                # Gráfico de drawdown en ROJO
                 dd = go.Figure()
-                dd.add_trace(go.Scatter(x=res["dates"], y=res["portfolio_drawdown"], fill='tozeroy', name="Portfolio DD"))
-                dd.add_trace(go.Scatter(x=res["dates"], y=res["benchmark_drawdown"], fill='tozeroy', name=f"{benchmark} DD"))
+                dd.add_trace(go.Scatter(x=result["dates"], y=result["portfolio_drawdown"], fill='tozeroy', name="Portfolio Drawdown", line=dict(color="red")))
+                dd.add_trace(go.Scatter(x=result["dates"], y=result["benchmark_drawdown"], fill='tozeroy', name=f"{benchmark} Drawdown", line=dict(color="orange")))
                 dd.update_layout(height=400, xaxis_title="Fecha", yaxis_title="Drawdown (%)")
                 st.plotly_chart(dd, use_container_width=True)
 else:
