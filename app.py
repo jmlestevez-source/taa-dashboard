@@ -181,11 +181,13 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 eq.append(eq[-1]*(1+ret))
             ind_series[s] = pd.Series(eq, index=[sig[0][0]]+[d for d,_ in sig])
 
-        df_ret = pd.DataFrame({
-            "SPY": spy_series.pct_change(),
-            **{s: ind_series[s].pct_change() for s in active}
-        }).dropna()
-        corr = df_ret.corr()
+                    # --- series individuales y correlaciones (sin duplicados) ---
+            ret_dict = {"SPY": spy_series.pct_change()}
+            for s in active:
+                ret_dict[s] = ind_series[s].pct_change()
+            df_ret = pd.DataFrame(ret_dict).dropna()
+            df_ret = df_ret[~df_ret.index.duplicated(keep='first')]  # elimina duplicados
+            corr = df_ret.corr()
 
         # ---------- PESTAÑAS ----------
         tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
