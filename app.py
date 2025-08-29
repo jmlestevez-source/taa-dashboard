@@ -215,7 +215,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         # --- series alineadas ---
         comb_series = pd.Series(portfolio, index=dates_for_portfolio)
         spy_series = (df["SPY"] / df["SPY"].iloc[4] * initial_capital) if "SPY" in df.columns else pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
-        spy_series = spy_series.reindex(comb_series.index).fillna(method='ffill')
+        spy_series = spy_series.reindex(comb_series.index).ffill()  # Corregido: ffill() en lugar de fillna(method='ffill')
 
         met_comb = calc_metrics(comb_series.pct_change().dropna())
         met_spy = calc_metrics(spy_series.pct_change().dropna())
@@ -265,7 +265,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 individual_dates.append(dt)
             
             ser = pd.Series(eq, index=individual_dates)
-            ser = ser.reindex(comb_series.index).fillna(method='ffill')
+            ser = ser.reindex(comb_series.index).ffill()  # Corregido: ffill() en lugar de fillna(method='ffill')
             ind_series[s] = ser
 
         # DataFrame de retornos para correlaciones
@@ -296,25 +296,31 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.metric("Sharpe (Combinada)", met_comb["Sharpe"])
             st.metric("Sharpe (SPY)", met_spy["Sharpe"])
 
-            # Mostrar señales actuales
+            # Mostrar señales actuales en modo porcentaje
             st.subheader("🎯 Señales Actuales")
             for strategy, signal in signals_dict.items():
-                st.write(f"**{strategy} (última señal):** {signal}")
+                st.write(f"**{strategy} (última señal):**")
+                signal_pct = {k: f"{v*100:.1f}%" for k, v in signal.items()}
+                st.write(signal_pct)
 
             # Equity
             fig = go.Figure()
-            fig.add_trace(go.Scatter(x=comb_series.index, y=comb_series, name="Combinada"))
-            fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(dash="dash")))
-            fig.update_layout(height=400, title="Equity Curve")
+            fig.add_trace(go.Scatter(x=comb_series.index, y=comb_series, name="Combinada", line=dict(color='blue', width=3)))
+            fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
+            fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
             st.plotly_chart(fig, use_container_width=True)
 
-            # Drawdown
+            # Drawdown con relleno y colores distintos
             dd_comb = (comb_series/comb_series.cummax()-1)*100
             dd_spy = (spy_series/spy_series.cummax()-1)*100
             fig_dd = go.Figure()
-            fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada"))
-            fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY"))
-            fig_dd.update_layout(height=300, yaxis_title="Drawdown %", title="Drawdown")
+            fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada", 
+                                      line=dict(color='red', width=2),
+                                      fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
+            fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY", 
+                                      line=dict(color='orange', width=2, dash="dot"),
+                                      fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
+            fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
             st.plotly_chart(fig_dd, use_container_width=True)
 
         # ---- TABS INDIVIDUALES ----
@@ -333,24 +339,29 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         st.metric("Sharpe", met["Sharpe"])
                         st.metric("Vol", f"{met['Vol']} %")
 
-                    # Mostrar señales actuales
+                    # Mostrar señales actuales en modo porcentaje
                     st.subheader("🎯 Señales Actuales")
                     if s in signals_dict:
-                        st.write("**Última señal:**", signals_dict[s])
+                        signal_pct = {k: f"{v*100:.1f}%" for k, v in signals_dict[s].items()}
+                        st.write("**Última señal:**", signal_pct)
 
-                    # Equity
+                    # Equity con colores distintos
                     fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=ser.index, y=ser, name=s))
-                    fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(dash="dash")))
-                    fig.update_layout(height=400, title="Equity Curve")
+                    fig.add_trace(go.Scatter(x=ser.index, y=ser, name=s, line=dict(color='green', width=3)))
+                    fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
+                    fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
                     st.plotly_chart(fig, use_container_width=True)
 
-                    # Drawdown
+                    # Drawdown con relleno y colores distintos
                     dd_ind = (ser/ser.cummax()-1)*100
                     fig_dd = go.Figure()
-                    fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s))
-                    fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY"))
-                    fig_dd.update_layout(height=300, yaxis_title="Drawdown %", title="Drawdown")
+                    fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s, 
+                                              line=dict(color='red', width=2),
+                                              fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
+                    fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY", 
+                                              line=dict(color='orange', width=2, dash="dot"),
+                                              fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
+                    fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
                     st.plotly_chart(fig_dd, use_container_width=True)
 
                     # Correlaciones
