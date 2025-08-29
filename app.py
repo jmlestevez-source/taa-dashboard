@@ -3,9 +3,9 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
-import yfinance as yf
 import time
 import random
+import requests
 from collections import defaultdict
 import os
 import pickle
@@ -31,6 +31,12 @@ DUAL_ROC4 = {
 }
 ALL_STRATEGIES = {"DAA KELLER": DAA_KELLER, "Dual Momentum ROC4": DUAL_ROC4}
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
+
+# FMP API Keys
+FMP_KEYS = ["6cb32e81af450a825085ffeef279c5c2", "FedUgaGEN9Pv19qgVxh2nHw0JWg5V6uh","P95gSmpsyRFELMKi8t7tSC0tn5y5JBlg"]
+FMP_CALLS = defaultdict(int)
+FMP_LIMIT_PER_MINUTE = 20
+FMP_LIMIT_PER_DAY = 250
 
 # Directorio para la caché
 CACHE_DIR = "cache"
@@ -65,53 +71,109 @@ def save_to_cache(ticker, start, end, data):
     except Exception as e:
         st.warning(f"⚠️ Error guardando {ticker} en caché: {e}")
 
-# ------------- DESCARGA (yfinance con manejo mejorado) -------------
+def get_available_fmp_key():
+    """Obtiene una API key disponible que no haya alcanzado el límite"""
+    # Primero intentar keys que no han alcanzado el límite diario
+    available_keys = [key for key in FMP_KEYS if FMP_CALLS[key] < FMP_LIMIT_PER_DAY]
+    
+    if available_keys:
+        return random.choice(available_keys)
+    
+    # Si todas han alcanzado el límite, usar la que menos llamadas tenga
+    st.warning("⚠️ Todas las API keys de FMP han alcanzado el límite diario.")
+    return min(FMP_KEYS, key=lambda k: FMP_CALLS[k])
+
+# ------------- DESCARGA (CSV desde GitHub + FMP) -------------
+def load_historical_data_from_csv(ticker):
+    """Carga datos históricos desde CSV en GitHub"""
+    try:
+        # URL base de tu repositorio GitHub
+        base_url = "https://raw.githubusercontent.com/jmlestevez-source/taa-dashboard/main/data/"
+        csv_url = f"{base_url}{ticker}.csv"
+        
+        st.write(f"📥 Cargando datos históricos de {ticker} desde CSV...")
+        df = pd.read_csv(csv_url, skiprows=3)  # Saltar las primeras 3 filas
+        
+        # Procesar el DataFrame
+        df['Date'] = pd.to_datetime(df['Date'])
+        df = df.set_index('Date')
+        df = df[['Close']].rename(columns={'Close': ticker})
+        df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
+        
+        st.write(f"✅ {ticker} cargado desde CSV - {len(df)} registros")
+        return df
+        
+    except Exception as e:
+        st.error(f"❌ Error cargando {ticker} desde CSV: {e}")
+        return pd.DataFrame()
+
+def get_fmp_data(ticker, days=30):
+    """Obtiene datos recientes de FMP"""
+    try:
+        api_key = get_available_fmp_key()
+        url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?timeseries={days}&apikey={api_key}"
+        
+        # Añadir delay para respetar límites
+        time.sleep(3)
+        
+        response = requests.get(url, timeout=30)
+        FMP_CALLS[api_key] += 1
+        
+        if response.status_code == 200:
+            data = response.json()
+            if 'historical' in data:
+                df = pd.DataFrame(data['historical'])
+                df['date'] = pd.to_datetime(df['date'])
+                df = df.set_index('date')
+                df = df[['close']].rename(columns={'close': ticker})
+                df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
+                st.write(f"✅ {ticker} datos recientes de FMP - {len(df)} registros")
+                return df
+                
+        st.warning(f"⚠️ No se pudieron obtener datos de FMP para {ticker}")
+        return pd.DataFrame()
+        
+    except Exception as e:
+        st.error(f"❌ Error obteniendo datos de FMP para {ticker}: {e}")
+        return pd.DataFrame()
+
 def download_ticker_data(ticker, start, end):
-    """Descarga datos de un ticker usando yfinance con mejor manejo de sesiones"""
+    """Descarga datos combinando CSV histórico + FMP reciente"""
     # Intentar cargar desde caché primero
     cached_data = load_from_cache(ticker, start, end)
     if cached_data is not None:
         return cached_data
     
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            st.write(f"📥 Descargando {ticker} desde Yahoo Finance (intento {attempt + 1})...")
-            
-            # Crear una nueva instancia de Ticker sin sesión personalizada
-            stock = yf.Ticker(ticker)
-            
-            # Convertir fechas a formato adecuado
-            start_str = start.strftime('%Y-%m-%d')
-            end_str = end.strftime('%Y-%m-%d')
-            
-            # Descargar datos diarios y luego convertir a mensuales
-            history = stock.history(start=start_str, end=end_str, interval="1d")
-            
-            if not history.empty and len(history) > 0:
-                # Convertir a datos mensuales tomando el último día de cada mes
-                history_monthly = history.resample('ME').last()  # ME = Month End
-                if not history_monthly.empty:
-                    df_monthly = history_monthly[['Close']].rename(columns={'Close': ticker})
-                    df_monthly[ticker] = pd.to_numeric(df_monthly[ticker], errors='coerce')
-                    st.write(f"✅ {ticker} descargado - {len(df_monthly)} registros")
-                    save_to_cache(ticker, start, end, df_monthly)
-                    return df_monthly
-                else:
-                    st.warning(f"⚠️ Datos mensuales vacíos para {ticker}")
-            else:
-                st.warning(f"⚠️ No se encontraron datos para {ticker}")
-                
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "too many requests" in error_msg or "rate limit" in error_msg or "403" in error_msg or "429" in error_msg:
-                wait_time = (2 ** attempt) * random.uniform(1, 3)  # Backoff exponencial con aleatoriedad
-                st.warning(f"⚠️ Rate limit para {ticker}. Esperando {wait_time:.1f} segundos...")
-                time.sleep(wait_time)
-                continue
-            else:
-                st.error(f"❌ Error descargando {ticker}: {str(e)[:100]}...")
-                break
+    try:
+        # 1. Cargar datos históricos desde CSV
+        hist_df = load_historical_data_from_csv(ticker)
+        if hist_df.empty:
+            return pd.DataFrame()
+        
+        # 2. Obtener datos recientes de FMP (últimos 30 días)
+        recent_df = get_fmp_data(ticker, days=30)
+        
+        # 3. Combinar datos
+        if not recent_df.empty:
+            # Concatenar y eliminar duplicados
+            combined_df = pd.concat([hist_df, recent_df])
+            combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
+            combined_df = combined_df.sort_index()
+        else:
+            combined_df = hist_df
+        
+        # 4. Filtrar por rango de fechas
+        combined_df = combined_df[(combined_df.index >= pd.Timestamp(start)) & 
+                                 (combined_df.index <= pd.Timestamp(end))]
+        
+        # 5. Convertir a datos mensuales
+        if not combined_df.empty:
+            monthly_df = combined_df.resample('ME').last()
+            save_to_cache(ticker, start, end, monthly_df)
+            return monthly_df
+        
+    except Exception as e:
+        st.error(f"❌ Error procesando {ticker}: {e}")
     
     return pd.DataFrame()
 
@@ -131,12 +193,15 @@ def download_all_data(tickers, start, end):
                 st.warning(f"⚠️ {tk} no disponible")
         except Exception as e:
             st.error(f"❌ Error procesando {tk}: {e}")
-        
-        # Pausa entre descargas para evitar rate limit
-        if idx < len(tickers) - 1:  # No hacer pausa en el último ticker
-            time.sleep(random.uniform(1, 2))  # Pausa aleatoria entre 1 y 2 segundos
     
     bar.empty()
+    
+    # Mostrar estadísticas de uso de API
+    st.subheader("📊 Uso de API Keys de FMP")
+    for key, calls in FMP_CALLS.items():
+        percentage = (calls / FMP_LIMIT_PER_DAY) * 100 if FMP_LIMIT_PER_DAY > 0 else 0
+        st.write(f"Key {key[:10]}...: {calls}/{FMP_LIMIT_PER_DAY} llamadas ({percentage:.1f}%)")
+    
     return data
 
 def clean_and_align(data_dict):
@@ -289,7 +354,7 @@ def format_signal_for_display(signal_dict):
                 "Ticker": ticker,
                 "Peso (%)": f"{weight * 100:.2f}"
             })
-    if not formatted_data:
+    if not formatted_
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
@@ -310,7 +375,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         all_tickers_needed.add("SPY")  # Siempre necesitamos SPY para benchmark
         
         tickers = list(all_tickers_needed)
-        st.write(f"📊 Tickers a descargar: {tickers}")
+        st.write(f"📊 Tickers a procesar: {tickers}")
         
         # Extender el rango de fechas para asegurar datos suficientes
         extended_start = start_date - timedelta(days=365*3)  # 3 años antes
@@ -323,7 +388,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         # Descargar datos
         raw = download_all_data(tickers, extended_start_ts, extended_end_ts)
         if not raw:
-            st.error("❌ No se pudieron descargar datos suficientes.")
+            st.error("❌ No se pudieron obtener datos suficientes.")
             st.stop()
             
         # Alinear datos
@@ -332,7 +397,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.error("❌ No hay datos suficientes para el análisis.")
             st.stop()
         
-        st.success(f"✅ Datos descargados y alineados: {df.shape}")
+        st.success(f"✅ Datos procesados y alineados: {df.shape}")
         
         # --- Calcular señales antes de filtrar ---
         if df.empty:
