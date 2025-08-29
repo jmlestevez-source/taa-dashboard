@@ -154,8 +154,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 portfolio.append(portfolio[-1]*(1+ret))
                 combined_weights.append((df.index[i], w_total))
 
-            comb_series = pd.Series(portfolio, index=df.index)
-            spy_series  = (df["SPY"]/df["SPY"].iloc[0])*initial_capital
+            # --- reemplazar las líneas 157-158 por estas dos ---
+trim_index = df.index[5:]   # empezamos donde empiezan los retornos
+comb_series = pd.Series(portfolio, index=trim_index)
+spy_series  = (df["SPY"]/df["SPY"].iloc[0])*initial_capital
+spy_series  = spy_series.iloc[5:]   # alineamos también SPY
             met_comb = calc_metrics(comb_series.pct_change().dropna())
             met_spy  = calc_metrics(spy_series.pct_change().dropna())
             latest_date, latest_w = combined_weights[-1]
