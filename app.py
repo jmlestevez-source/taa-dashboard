@@ -44,7 +44,7 @@ def get_available_av_key():
         return random.choice(available_keys)
     
     # Si todas han alcanzado el límite, usar la que menos llamadas tenga
-    st.warning("⚠️ Todas las API keys de Alpha Vantage han alcanzado el límite diario. Usando la key con menos llamadas.")
+    st.warning("⚠️ Todas las API keys de Alpha Vantage han alcanzado el límite diario.")
     return min(AV_KEYS, key=lambda k: AV_CALLS[k])
 
 # ------------- DESCARGA (Alpha Vantage) -------------
@@ -56,7 +56,7 @@ def av_monthly(ticker):
             # Obtener una API key disponible
             api_key = get_available_av_key()
             
-            # URL para datos mensuales (TIME_SERIES_MONTHLY)
+            # URL para datos mensuales ajustados
             url = f'https://www.alphavantage.co/query?function=TIME_SERIES_MONTHLY_ADJUSTED&symbol={ticker}&apikey={api_key}'
             
             # Añadir delay para respetar el límite de 5 llamadas por minuto
@@ -103,14 +103,17 @@ def av_monthly(ticker):
             df = df.sort_index()
             
             # Seleccionar el precio de cierre ajustado y renombrar
+            if '5. adjusted close' not in df.columns:
+                st.error(f"❌ Columna '5. adjusted close' no encontrada para {ticker}")
+                return pd.DataFrame()
+                
             df = df[['5. adjusted close']].rename(columns={'5. adjusted close': ticker})
             df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
             
-            # Resamplear a fin de mes si es necesario (los datos de AV ya son mensuales)
-            # Pero nos aseguramos de que la fecha sea el último día del mes
+            # Asegurarse de que la fecha sea el último día del mes
             df.index = df.index.to_period('M').to_timestamp('M')
             
-            st.write(f"✅ {ticker} descargado con key {api_key[:5]}... ({AV_CALLS[api_key]}/{AV_LIMIT_PER_DAY})")
+            st.write(f"✅ {ticker} descargado con key {api_key[:5]}... ({AV_CALLS[api_key]}/{AV_LIMIT_PER_DAY}) - {len(df)} registros hasta {df.index[-1].strftime('%Y-%m-%d') if len(df) > 0 else 'N/A'}")
             return df
             
         except Exception as e:
@@ -131,7 +134,6 @@ def download_once_av(tickers):
             df = av_monthly(tk)
             if not df.empty and len(df) > 0:
                 data[tk] = df
-                st.write(f"✅ {tk} añadido - {len(df)} registros (hasta {df.index[-1].strftime('%Y-%m-%d') if len(df) > 0 else 'N/A'})")
             else:
                 st.warning(f"⚠️ {tk} no disponible")
         except Exception as e:
@@ -142,7 +144,7 @@ def download_once_av(tickers):
     # Mostrar estadísticas de uso de API
     st.subheader("📊 Uso de API Keys de Alpha Vantage")
     for key, calls in AV_CALLS.items():
-        percentage = (calls / AV_LIMIT_PER_DAY) * 100
+        percentage = (calls / AV_LIMIT_PER_DAY) * 100 if AV_LIMIT_PER_DAY > 0 else 0
         st.write(f"Key {key[:5]}...: {calls}/{AV_LIMIT_PER_DAY} llamadas ({percentage:.1f}%)")
     
     return data
@@ -177,24 +179,40 @@ def momentum_score(df, col):
         return 0
     if df[col].iloc[-5] <= 0:
         return 0
-    return (df[col].iloc[-1] / df[col].iloc[-5]) - 1
+    try:
+        result = (df[col].iloc[-1] / df[col].iloc[-5]) - 1
+        return result
+    except Exception:
+        return 0
 
 def calc_metrics(rets):
     rets = rets.dropna()
-    if len(rets) == 0:
-        return {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
-    # Evitar divisiones por cero
-    if len(rets) < 2:
+    if len(rets) < 2: # Necesitamos al menos 2 puntos para calcular métricas
         return {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
     
-    eq = (1 + rets).cumprod()
-    yrs = len(rets) / 12
-    cagr = eq.iloc[-1] ** (1 / yrs) - 1 if yrs > 0 and eq.iloc[-1] > 0 else 0
-    dd = (eq / eq.cummax() - 1).min()
-    sharpe = (rets.mean() / rets.std()) * np.sqrt(12) if rets.std() != 0 else 0
-    vol = rets.std() * np.sqrt(12)
-    return {"CAGR": round(cagr * 100, 2), "MaxDD": round(dd * 100, 2),
-            "Sharpe": round(sharpe, 2), "Vol": round(vol * 100, 2)}
+    try:
+        eq = (1 + rets).cumprod()
+        yrs = len(rets) / 12
+        # Evitar divisiones por cero o valores negativos en la raíz
+        if yrs <= 0 or eq.iloc[-1] <= 0:
+            cagr = 0
+        else:
+            cagr = eq.iloc[-1] ** (1 / yrs) - 1
+            
+        if len(eq) == 0 or eq.cummax().iloc[-1] == 0:
+            dd = 0
+        else:
+            dd_series = (eq / eq.cummax()) - 1
+            dd = dd_series.min()
+            
+        sharpe = (rets.mean() / rets.std()) * np.sqrt(12) if rets.std() != 0 else 0
+        vol = rets.std() * np.sqrt(12)
+        
+        return {"CAGR": round(cagr * 100, 2), "MaxDD": round(dd * 100, 2),
+                "Sharpe": round(sharpe, 2), "Vol": round(vol * 100, 2)}
+    except Exception as e:
+        st.error(f"Error calculando métricas: {e}")
+        return {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
 
 # ------------- MOTORES -------------
 def weights_daa(df, risky, protect, canary):
@@ -217,8 +235,8 @@ def weights_daa(df, risky, protect, canary):
                 top_p = max(pro, key=pro.get)
                 w = {top_p: 1.0}
             elif n == 1 and pro and ris and len(pro) > 0 and len(ris) > 0:
-                top_p = max(pro, key=pro.get)
-                top_r = sorted(ris, key=ris.get, reverse=True)[:6]
+                top_p = max(pro, key=pro.get) if pro else None
+                top_r = sorted(ris, key=ris.get, reverse=True)[:6] if ris else []
                 if top_p and top_r:
                     w = {top_p: 0.5}
                     w.update({t: 0.5/6 for t in top_r})
@@ -229,10 +247,10 @@ def weights_daa(df, risky, protect, canary):
             
             sig.append((df.index[i], w))
         except Exception as e:
-            st.error(f"Error en DAA para {df.index[i] if i < len(df) else 'fecha desconocida'}: {e}")
-            sig.append((df.index[i] if i < len(df) else df.index[-1], {}))
+            # En caso de error, añadir señal vacía para esta fecha
+            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
     
-    return sig if sig else [(df.index[-1], {})]
+    return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_roc4(df, universe, fill):
     if len(df) < 6:
@@ -247,7 +265,7 @@ def weights_roc4(df, universe, fill):
             fill_roc = {s: momentum_score(df.iloc[:i+1], s) for s in fill if s in df.columns}
             
             positive = [s for s, v in roc.items() if v > 0]
-            selected = sorted(positive, key=lambda s: roc[s], reverse=True)[:6]
+            selected = sorted(positive, key=lambda s: roc.get(s, 0), reverse=True)[:6]
             n_sel = len(selected)
             
             weights = {}
@@ -255,16 +273,42 @@ def weights_roc4(df, universe, fill):
                 weights[s] = base
             
             if n_sel < 6 and fill_roc and len(fill_roc) > 0:
-                best = max(fill_roc, key=fill_roc.get)
-                extra = (6 - n_sel) * base
-                weights[best] = weights.get(best, 0) + extra
+                best = max(fill_roc, key=fill_roc.get) if fill_roc else None
+                if best:
+                    extra = (6 - n_sel) * base
+                    weights[best] = weights.get(best, 0) + extra
             
             sig.append((df.index[i], weights))
         except Exception as e:
-            st.error(f"Error en ROC4 para {df.index[i] if i < len(df) else 'fecha desconocida'}: {e}")
-            sig.append((df.index[i] if i < len(df) else df.index[-1], {}))
+            # En caso de error, añadir señal vacía para esta fecha
+            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
     
-    return sig if sig else [(df.index[-1], {})]
+    return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+
+# ------------- FUNCIONES AUXILIARES PARA SEÑALES -------------
+def format_signal_for_display(signal_dict):
+    """Formatea un diccionario de señal para mostrarlo como tabla"""
+    if not signal_dict:
+        return "Sin posición"
+    
+    formatted_data = []
+    for ticker, weight in signal_dict.items():
+        if weight > 0: # Solo mostrar tickers con peso
+            formatted_data.append({
+                "Ticker": ticker,
+                "Peso (%)": f"{weight * 100:.2f}"
+            })
+    if not formatted_data:
+        return "Sin posición"
+    return pd.DataFrame(formatted_data)
+
+def get_last_business_day_of_previous_month(date):
+    """Obtiene el último día hábil del mes anterior a la fecha dada."""
+    # Primer día del mes actual
+    first_of_current_month = date.replace(day=1)
+    # Último día del mes anterior
+    last_of_previous_month = first_of_current_month - timedelta(days=1)
+    return last_of_previous_month
 
 # ------------- MAIN -------------
 if st.sidebar.button("🚀 Ejecutar", type="primary"):
@@ -299,7 +343,49 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         
         st.success(f"✅ Datos descargados y alineados de Alpha Vantage: {df.shape}")
         
-        # Filtrar al rango de fechas del usuario
+        # --- Calcular señales antes de filtrar ---
+        # Señal REAL (basada en datos hasta end_date)
+        df_up_to_end_date = df[df.index <= pd.Timestamp(end_date)]
+        if df_up_to_end_date.empty:
+             st.error("❌ No hay datos hasta la fecha de fin seleccionada.")
+             st.stop()
+        
+        # Señal HIPOTÉTICA (basada en todos los datos descargados)
+        df_full = df # Todos los datos disponibles
+
+        signals_dict_last = {}
+        signals_dict_current = {}
+        
+        for s in active:
+            try:
+                if s == "DAA KELLER":
+                    sig_last = weights_daa(df_up_to_end_date, **ALL_STRATEGIES[s])
+                    sig_current = weights_daa(df_full, **ALL_STRATEGIES[s])
+                else: # DUAL_ROC4
+                    sig_last = weights_roc4(df_up_to_end_date, 
+                                          ALL_STRATEGIES[s]["universe"],
+                                          ALL_STRATEGIES[s]["fill"])
+                    sig_current = weights_roc4(df_full,
+                                             ALL_STRATEGIES[s]["universe"],
+                                             ALL_STRATEGIES[s]["fill"])
+                
+                # Guardar la última señal de cada tipo
+                if sig_last and len(sig_last) > 0:
+                    signals_dict_last[s] = sig_last[-1][1] # (fecha, pesos_dict)
+                else:
+                    signals_dict_last[s] = {}
+                    
+                if sig_current and len(sig_current) > 0:
+                    signals_dict_current[s] = sig_current[-1][1]
+                else:
+                    signals_dict_current[s] = {}
+                    
+            except Exception as e:
+                st.error(f"Error calculando señales para {s}: {e}")
+                signals_dict_last[s] = {}
+                signals_dict_current[s] = {}
+
+        # Filtrar al rango de fechas del usuario PARA LOS CÁLCULOS DE EQUITY
         df_filtered = df[(df.index >= pd.Timestamp(start_date)) & (df.index <= pd.Timestamp(end_date))]
         if df_filtered.empty:
             st.error("❌ No hay datos en el rango de fechas seleccionado.")
@@ -310,10 +396,21 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         # --- cálculo de cartera combinada ---
         try:
             portfolio = [initial_capital]
-            dates_for_portfolio = [df_filtered.index[4]]  # Primera fecha
+            dates_for_portfolio = []
             
+            if len(df_filtered) < 6:
+                 st.error("❌ No hay suficientes datos en el rango filtrado.")
+                 st.stop()
+
+            # Empezar desde un índice que tenga suficientes datos para momentum (índice 5)
+            start_calc_index = 5
+            if start_calc_index >= len(df_filtered):
+                start_calc_index = len(df_filtered) - 1
+                
+            dates_for_portfolio.append(df_filtered.index[start_calc_index-1])
+
             # Calcular retornos de la cartera combinada
-            for i in range(5, len(df_filtered)):
+            for i in range(start_calc_index, len(df_filtered)):
                 w_total = {}
                 for s in active:
                     if s == "DAA KELLER":
@@ -325,7 +422,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                 for t, v in w.items():
                                     w_total[t] = w_total.get(t, 0) + v / len(active)
                         except Exception as e:
-                            st.warning(f"Error calculando pesos DAA KELLER: {e}")
+                            pass
                     else:
                         try:
                             sig_result = weights_roc4(df_filtered.iloc[:i+1],
@@ -337,7 +434,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                 for t, v in w.items():
                                     w_total[t] = w_total.get(t, 0) + v / len(active)
                         except Exception as e:
-                            st.warning(f"Error calculando pesos ROC4: {e}")
+                            pass
                 
                 # Calcular retorno de la cartera para este período
                 ret = 0
@@ -347,7 +444,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             if df_filtered.iloc[i-1][t] != 0 and not pd.isna(df_filtered.iloc[i-1][t]) and not pd.isna(df_filtered.iloc[i][t]):
                                 asset_ret = (df_filtered.iloc[i][t] / df_filtered.iloc[i-1][t]) - 1
                                 ret += weight * asset_ret
-                        except Exception as e:
+                        except Exception:
                             pass  # Ignorar errores individuales de assets
                 
                 portfolio.append(portfolio[-1] * (1 + ret))
@@ -359,13 +456,23 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             # Crear SPY benchmark
             if "SPY" in df_filtered.columns:
                 spy_prices = df_filtered["SPY"]
-                if len(spy_prices) > 0 and spy_prices.iloc[0] > 0:
+                if len(spy_prices) > 0 and spy_prices.iloc[0] > 0 and not pd.isna(spy_prices.iloc[0]):
                     spy_series = (spy_prices / spy_prices.iloc[0] * initial_capital)
                     spy_series = spy_series.reindex(comb_series.index).ffill()
                 else:
                     spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
             else:
-                spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
+                # Si SPY no está disponible en el periodo filtrado, usar el disponible
+                if "SPY" in df.columns:
+                    spy_full = df["SPY"]
+                    spy_filtered_for_benchmark = spy_full[(spy_full.index >= pd.Timestamp(start_date)) & (spy_full.index <= pd.Timestamp(end_date))]
+                    if len(spy_filtered_for_benchmark) > 0 and spy_filtered_for_benchmark.iloc[0] > 0 and not pd.isna(spy_filtered_for_benchmark.iloc[0]):
+                        spy_series = (spy_filtered_for_benchmark / spy_filtered_for_benchmark.iloc[0] * initial_capital)
+                        spy_series = spy_series.reindex(comb_series.index).ffill()
+                    else:
+                        spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
+                else:
+                    spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
             
             # Calcular métricas
             met_comb = calc_metrics(comb_series.pct_change().dropna())
@@ -377,44 +484,52 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.error(f"❌ Error en cálculos principales: {e}")
             st.stop()
 
-        # --- calcular señales ---
-        try:
-            # Señal real (última del periodo)
-            signals_dict_last = {}
-            # Señal hipotética (hoy)
-            signals_dict_current = {}
-            
-            for s in active:
+        # --- cálculo de series individuales ---
+        ind_series = {}
+        ind_metrics = {}
+        
+        for s in active:
+            try:
                 if s == "DAA KELLER":
-                    # Señal real - datos filtrados
-                    sig_last = weights_daa(df_filtered, **ALL_STRATEGIES[s])
-                    if sig_last and len(sig_last) > 0:
-                        signals_dict_last[s] = sig_last[-1][1]
-                    
-                    # Señal hipotética - todos los datos
-                    sig_current = weights_daa(df, **ALL_STRATEGIES[s])
-                    if sig_current and len(sig_current) > 0:
-                        signals_dict_current[s] = sig_current[-1][1]
+                    sig = weights_daa(df_filtered, **ALL_STRATEGIES[s])
                 else:
-                    # Señal real - datos filtrados
-                    sig_last = weights_roc4(df_filtered, 
-                                          ALL_STRATEGIES[s]["universe"],
-                                          ALL_STRATEGIES[s]["fill"])
-                    if sig_last and len(sig_last) > 0:
-                        signals_dict_last[s] = sig_last[-1][1]
+                    sig = weights_roc4(df_filtered, 
+                                     ALL_STRATEGIES[s]["universe"],
+                                     ALL_STRATEGIES[s]["fill"])
+                
+                eq = [initial_capital]
+                individual_dates = [df_filtered.index[start_calc_index-1]] if start_calc_index > 0 else [df_filtered.index[0]]
+                
+                for i in range(start_calc_index, len(df_filtered)):
+                    ret = 0
+                    try:
+                        if i - start_calc_index < len(sig) and len(sig) > 0:
+                            idx_sig = i - start_calc_index
+                            if idx_sig < len(sig):
+                                w = sig[idx_sig][1]
+                                for t, weight in w.items():
+                                    if t in df_filtered.columns and i > 0:
+                                        try:
+                                            if df_filtered.iloc[i-1][t] != 0 and not pd.isna(df_filtered.iloc[i-1][t]) and not pd.isna(df_filtered.iloc[i][t]):
+                                                asset_ret = (df_filtered.iloc[i][t] / df_filtered.iloc[i-1][t]) - 1
+                                                ret += weight * asset_ret
+                                        except:
+                                            pass
+                    except:
+                        pass
                     
-                    # Señal hipotética - todos los datos
-                    sig_current = weights_roc4(df,
-                                             ALL_STRATEGIES[s]["universe"],
-                                             ALL_STRATEGIES[s]["fill"])
-                    if sig_current and len(sig_current) > 0:
-                        signals_dict_current[s] = sig_current[-1][1]
-            
-            st.success("✅ Señales calculadas")
-        except Exception as e:
-            st.error(f"❌ Error calculando señales: {e}")
-            signals_dict_last = {}
-            signals_dict_current = {}
+                    eq.append(eq[-1] * (1 + ret))
+                    individual_dates.append(df_filtered.index[i])
+                
+                ser = pd.Series(eq, index=individual_dates)
+                ser = ser.reindex(comb_series.index).ffill()
+                ind_series[s] = ser
+                ind_metrics[s] = calc_metrics(ser.pct_change().dropna())
+                
+            except Exception as e:
+                st.error(f"Error calculando serie para {s}: {e}")
+                ind_series[s] = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
+                ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
 
         # ---------- MOSTRAR RESULTADOS ----------
         try:
@@ -434,26 +549,27 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.metric("Sharpe (Combinada)", met_comb["Sharpe"])
                 st.metric("Sharpe (SPY)", met_spy["Sharpe"])
                 
-                # Mostrar señales
-                st.subheader("🎯 Señales Actuales")
-                signals_data = []
-                for strategy in active:
-                    last_signal = signals_dict_last.get(strategy, {})
-                    current_signal = signals_dict_current.get(strategy, {})
-                    
-                    last_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in last_signal.items()}
-                    current_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in current_signal.items()}
-                    
-                    signals_data.append({
-                        "Estrategia": strategy,
-                        "Última (Real)": str(last_pct) if last_pct else "-",
-                        "Actual (Hipotética)": str(current_pct) if current_pct else "-"
-                    })
+                # Mostrar señales COMBINADAS
+                st.subheader("🎯 Señal Cartera Combinada")
+                # Combinar señales individuales para mostrar la combinada
+                combined_last = {}
+                combined_current = {}
+                for s in active:
+                    last_sig = signals_dict_last.get(s, {})
+                    current_sig = signals_dict_current.get(s, {})
+                    for t, w in last_sig.items():
+                        combined_last[t] = combined_last.get(t, 0) + w / len(active)
+                    for t, w in current_sig.items():
+                        combined_current[t] = combined_current.get(t, 0) + w / len(active)
                 
-                if len(signals_data) > 0:  # Corregido: condición completa
-                    signals_df = pd.DataFrame(signals_data)
-                    st.dataframe(signals_df, use_container_width=True)
-                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Última (Real):**")
+                    st.dataframe(format_signal_for_display(combined_last), use_container_width=True)
+                with col2:
+                    st.write("**Actual (Hipotética):**")
+                    st.dataframe(format_signal_for_display(combined_current), use_container_width=True)
+
                 # Gráficos
                 st.subheader("📈 Equity Curve")
                 fig = go.Figure()
@@ -477,7 +593,61 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.plotly_chart(fig_dd, use_container_width=True)
                 
         except Exception as e:
-            st.error(f"❌ Error mostrando resultados: {e}")
+            st.error(f"❌ Error mostrando resultados combinados: {e}")
+
+        # ---- TABS INDIVIDUALES ----
+        for idx, s in enumerate(active, start=1):
+            try:
+                with tabs[idx]:
+                    st.header(s)
+                    
+                    if s in ind_series and s in ind_metrics:
+                        ser = ind_series[s]
+                        met = ind_metrics[s]
+
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("CAGR", f"{met['CAGR']} %")
+                            st.metric("MaxDD", f"{met['MaxDD']} %")
+                        with col2:
+                            st.metric("Sharpe", met["Sharpe"])
+                            st.metric("Vol", f"{met['Vol']} %")
+
+                        # Mostrar señales individuales
+                        st.subheader("🎯 Señales")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write("**Última (Real):**")
+                            st.dataframe(format_signal_for_display(signals_dict_last.get(s, {})), use_container_width=True, height=200)
+                        with col2:
+                            st.write("**Actual (Hipotética):**")
+                            st.dataframe(format_signal_for_display(signals_dict_current.get(s, {})), use_container_width=True, height=200)
+
+                        # Gráficos individuales
+                        st.subheader("📈 Equity Curve")
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=ser.index, y=ser, name=s, line=dict(color='green', width=3)))
+                        fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
+                        fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
+                        st.plotly_chart(fig, use_container_width=True)
+
+                        # Drawdown individuales
+                        st.subheader("📉 Drawdown")
+                        dd_ind = (ser/ser.cummax()-1)*100
+                        fig_dd = go.Figure()
+                        fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s, 
+                                                  line=dict(color='red', width=2),
+                                                  fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
+                        fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY", 
+                                                  line=dict(color='orange', width=2, dash="dot"),
+                                                  fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
+                        fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
+                        st.plotly_chart(fig_dd, use_container_width=True)
+                    else:
+                        st.write("No hay datos disponibles para esta estrategia.")
+                        
+            except Exception as e:
+                st.error(f"❌ Error en pestaña {s}: {e}")
             
 else:
     st.info("👈 Configura y ejecuta")
