@@ -105,22 +105,46 @@ def load_historical_data_from_csv(ticker):
             # Leer el CSV desde el contenido de la respuesta
             csv_content = response.content.decode('utf-8')
             
-            # Leer el CSV saltando las 3 primeras filas de encabezados
-            df = pd.read_csv(StringIO(csv_content), skiprows=3)
+            # Dividir el contenido en líneas
+            lines = csv_content.strip().split('\n')
             
-            # Las columnas son: Date, Price, Close, High, Low, Open, Volume
-            # Usamos la columna 'Close' como precio de cierre
-            if len(df.columns) >= 2 and 'Date' in df.columns and 'Close' in df.columns:
-                # Procesar el DataFrame
-                df['Date'] = pd.to_datetime(df['Date'])
-                df = df.set_index('Date')
-                df = df[['Close']].rename(columns={'Close': ticker})
-                df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
+            # Verificar que tengamos suficientes líneas
+            if len(lines) < 4:
+                st.error(f"❌ CSV de {ticker} tiene muy pocas líneas")
+                return pd.DataFrame()
+            
+            # Saltar las 3 primeras filas de encabezados y procesar los datos
+            data_lines = lines[3:]  # A partir de la cuarta línea
+            
+            # Parsear los datos
+            dates = []
+            close_prices = []
+            
+            for line in data_lines:
+                if line.strip():  # Ignorar líneas vacías
+                    parts = line.split(',')
+                    if len(parts) >= 2:
+                        try:
+                            # Primera columna es la fecha
+                            date = pd.to_datetime(parts[0])
+                            # Segunda columna es el precio de cierre
+                            close_price = pd.to_numeric(parts[1], errors='coerce')
+                            
+                            dates.append(date)
+                            close_prices.append(close_price)
+                        except Exception as e:
+                            st.warning(f"⚠️ Error parseando línea: {line[:50]}...")
+                            continue
+            
+            # Crear DataFrame
+            if dates and close_prices:
+                df = pd.DataFrame({ticker: close_prices}, index=dates)
+                df.index = pd.to_datetime(df.index)
                 
                 st.write(f"✅ {ticker} cargado desde CSV - {len(df)} registros")
                 return df
             else:
-                st.error(f"❌ Formato incorrecto en {ticker}.csv. Columnas: {list(df.columns)}")
+                st.error(f"❌ No se pudieron parsear datos de {ticker}.csv")
                 return pd.DataFrame()
                 
         else:
