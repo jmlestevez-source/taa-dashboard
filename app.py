@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import requests
 import time
 import random
+from collections import defaultdict
 
 # ------------- CONFIG -------------
 st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
@@ -14,69 +15,118 @@ st.title("🎯 Multi-Strategy Tactical Asset Allocation")
 # ------------- SIDEBAR -------------
 initial_capital = st.sidebar.number_input("💰 Capital Inicial ($)", 1000, 10_000_000, 100_000, 1000)
 start_date = st.sidebar.date_input("Fecha de inicio", datetime(2015, 1, 1))
-end_date = st.sidebar.date_input("Fecha de fin", datetime.today())
+end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today())
 
 DAA_KELLER = {
-    "risky": ['SPY', 'IWM', 'QQQ', 'VGK', 'EWJ', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'HYG', 'LQD'],
-    "protect": ['SHY', 'IEF', 'LQD'],
-    "canary": ['EEM', 'AGG']
+    "risky":   ['SPY','IWM','QQQ','VGK','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD'],
+    "protect": ['SHY','IEF','LQD'],
+    "canary":  ['EEM','AGG']
 }
 DUAL_ROC4 = {
-    "universe": ['SPY', 'IWM', 'QQQ', 'VGK', 'EWJ', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'HYG', 'LQD', 'IEF'],
-    "fill": ['IEF', 'TLT', 'SHY']
+    "universe":['SPY','IWM','QQQ','VGK','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD','IEF'],
+    "fill":    ['IEF','TLT','SHY']
 }
 ALL_STRATEGIES = {"DAA KELLER": DAA_KELLER, "Dual Momentum ROC4": DUAL_ROC4}
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
-# API Keys
-FMP_KEYS = ["6cb32e81af450a825085ffeef279c5c2", "FedUgaGEN9Pv19qgVxh2nHw0JWg5V6uh", "P95gSmpsyRFELMKi8t7tSC0tn5y5JBlg"]
+# API Keys y control de límites
+FMP_KEYS = ["6cb32e81af450a825085ffeef279c5c2", "FedUgaGEN9Pv19qgVxh2nHw0JWg5V6uh","P95gSmpsyRFELMKi8t7tSC0tn5y5JBlg"]
+API_CALLS = defaultdict(int)  # Contador de llamadas por key
+API_LIMIT = 250  # Límite de llamadas por día
+
+def get_available_api_key():
+    """Obtiene una API key disponible que no haya alcanzado el límite"""
+    # Primero intentar keys que no han alcanzado el límite
+    available_keys = [key for key in FMP_KEYS if API_CALLS[key] < API_LIMIT]
+    
+    if available_keys:
+        return random.choice(available_keys)
+    
+    # Si todas han alcanzado el límite, usar la que menos llamadas tenga
+    st.warning("⚠️ Todas las API keys han alcanzado el límite. Usando la key con menos llamadas.")
+    return min(FMP_KEYS, key=lambda k: API_CALLS[k])
 
 def fmp_key(): return random.choice(FMP_KEYS)
 
 # ------------- DESCARGA -------------
 @st.cache_data(show_spinner=False)
 def fmp_monthly(ticker, start, end):
-    url = (f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}"
-           f"?from={start.strftime('%Y-%m-%d')}&to={end.strftime('%Y-%m-%d')}&apikey={fmp_key()}")
-    try:
-        # Añadir delay para evitar 429
-        time.sleep(0.1)
-        r = requests.get(url, timeout=30)
-        if r.status_code != 200:
-            st.warning(f"⚠️ Error {r.status_code} descargando {ticker}")
-            return pd.DataFrame()
-        hist = r.json().get("historical", [])
-        if not hist:
-            st.warning(f"⚠️ No hay datos históricos para {ticker}")
-            return pd.DataFrame()
-        df = pd.DataFrame(hist)
-        if df.empty:
-            st.warning(f"⚠️ DataFrame vacío para {ticker}")
-            return pd.DataFrame()
-        df["date"] = pd.to_datetime(df["date"])
-        df = df.sort_values("date").set_index("date")
-        result = df["close"].resample("ME").last().to_frame(ticker)
-        return result
-    except Exception as e:
-        st.error(f"❌ Error descargando {ticker}: {e}")
-        return pd.DataFrame()
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # Obtener una API key disponible
+            api_key = get_available_api_key()
+            
+            url = (f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}"
+                   f"?from={start.strftime('%Y-%m-%d')}&to={end.strftime('%Y-%m-%d')}&apikey={api_key}")
+            
+            # Añadir delay para evitar sobrecarga
+            time.sleep(0.3)
+            
+            r = requests.get(url, timeout=30)
+            
+            # Incrementar contador de llamadas
+            API_CALLS[api_key] += 1
+            
+            if r.status_code == 429:
+                st.warning(f"⚠️ Límite alcanzado para key {api_key[:10]}... Intentando con otra key")
+                # Forzar rotación de key en el próximo intento
+                continue
+                
+            if r.status_code != 200:
+                st.warning(f"⚠️ Error HTTP {r.status_code} para {ticker} (key: {api_key[:10]}...)")
+                if attempt < max_retries - 1:
+                    time.sleep(1 * (2 ** attempt))  # Backoff exponencial
+                    continue
+                return pd.DataFrame()
+                
+            hist = r.json().get("historical", [])
+            if not hist:
+                return pd.DataFrame()
+                
+            df = pd.DataFrame(hist)
+            if df.empty:
+                return pd.DataFrame()
+                
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.sort_values("date").set_index("date")
+            result = df["close"].resample("ME").last().to_frame(ticker)
+            
+            st.write(f"✅ {ticker} descargado con key {api_key[:10]}... ({API_CALLS[api_key]}/{API_LIMIT})")
+            return result
+            
+        except Exception as e:
+            st.error(f"❌ Error descargando {ticker} (intento {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1 * (2 ** attempt))  # Backoff exponencial
+    
+    return pd.DataFrame()
 
 def download_once(tickers, start, end):
     st.info("📥 Descargando datos únicos…")
     data, bar = {}, st.progress(0)
     total_tickers = len(tickers)
+    
     for idx, tk in enumerate(tickers):
         try:
             bar.progress((idx + 1) / total_tickers)
             df = fmp_monthly(tk, start, end)
             if not df.empty and len(df) > 0:
                 data[tk] = df
-                st.write(f"✅ {tk} descargado ({len(df)} registros)")
+                st.write(f"✅ {tk} añadido - {len(df)} registros")
             else:
                 st.warning(f"⚠️ {tk} no disponible")
         except Exception as e:
             st.error(f"❌ Error procesando {tk}: {e}")
+    
     bar.empty()
+    
+    # Mostrar estadísticas de uso de API
+    st.subheader("📊 Uso de API Keys")
+    for key, calls in API_CALLS.items():
+        percentage = (calls / API_LIMIT) * 100
+        st.write(f"Key {key[:10]}...: {calls}/{API_LIMIT} llamadas ({percentage:.1f}%)")
+    
     return data
 
 def clean_and_align(data_dict):
@@ -387,7 +437,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         "Actual (Hipotética)": str(current_pct) if current_pct else "-"
                     })
                 
-                if signals_data:
+                if len(signals_data) > 0:  # Corregido: condición completa
                     signals_df = pd.DataFrame(signals_data)
                     st.dataframe(signals_df, use_container_width=True)
                 
