@@ -14,7 +14,7 @@ st.title("🎯 Multi-Strategy Tactical Asset Allocation")
 
 # ------------- SIDEBAR -------------
 initial_capital = st.sidebar.number_input("💰 Capital Inicial ($)", 1000, 10_000_000, 100_000, 1000)
-start_date = st.sidebar.date_input("Fecha de inicio", datetime(2010, 1, 1))
+start_date = st.sidebar.date_input("Fecha de inicio", datetime(2015, 1, 1))
 end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today())
 
 DAA_KELLER = {
@@ -129,7 +129,8 @@ def weights_daa(df, risky, protect, canary):
                     w = {t: 1/6 for t in top_r}
             
             sig.append((df.index[i], w))
-        except:
+        except Exception as e:
+            print(f"Error en DAA para fecha {df.index[i]}: {e}")
             sig.append((df.index[i], {}))
     
     return sig if sig else [(df.index[-1], {})]
@@ -162,7 +163,8 @@ def weights_roc4(df, universe, fill):
                     weights[best] = weights.get(best, 0) + extra
             
             sig.append((df.index[i], weights))
-        except:
+        except Exception as e:
+            print(f"Error en ROC4 para fecha {df.index[i]}: {e}")
             sig.append((df.index[i], {}))
     
     return sig if sig else [(df.index[-1], {})]
@@ -225,7 +227,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             _, w = sig_result[-1]
                         else:
                             w = {}
-                    except:
+                    except Exception as e:
+                        print(f"Error DAA KELLER en índice {i}: {e}")
                         w = {}
                 else:
                     try:
@@ -236,7 +239,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             _, w = sig_result[-1]
                         else:
                             w = {}
-                    except:
+                    except Exception as e:
+                        print(f"Error ROC4 en índice {i}: {e}")
                         w = {}
                 
                 for t, v in w.items():
@@ -250,7 +254,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         if df_filtered.iloc[i-1][t] != 0 and not pd.isna(df_filtered.iloc[i-1][t]) and not pd.isna(df_filtered.iloc[i][t]):
                             asset_ret = (df_filtered.iloc[i][t] / df_filtered.iloc[i-1][t]) - 1
                             ret += weight * asset_ret
-                    except:
+                    except Exception as e:
+                        print(f"Error calculando retorno para {t}: {e}")
                         pass
             
             portfolio.append(portfolio[-1] * (1 + ret))
@@ -268,30 +273,44 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             else:
                 spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
         else:
-            spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
+            # Si SPY no está en df_filtered, intentar con df completo
+            if "SPY" in df.columns:
+                spy_prices_full = df["SPY"]
+                # Filtrar al rango de fechas
+                spy_prices_filtered = spy_prices_full[(spy_prices_full.index >= pd.Timestamp(start_date)) & 
+                                                    (spy_prices_full.index <= pd.Timestamp(end_date))]
+                if len(spy_prices_filtered) > 0 and spy_prices_filtered.iloc[0] > 0 and not pd.isna(spy_prices_filtered.iloc[0]):
+                    spy_series = (spy_prices_filtered / spy_prices_filtered.iloc[0] * initial_capital)
+                    spy_series = spy_series.reindex(comb_series.index).ffill()
+                else:
+                    spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
+            else:
+                spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
 
         met_comb = calc_metrics(comb_series.pct_change().dropna())
         met_spy = calc_metrics(spy_series.pct_change().dropna())
 
         # --- calcular señales individuales y combinadas ---
-        # Señales reales (último mes completo - datos hasta el final del mes anterior)
+        # Señales reales (último mes completo - datos hasta el final del periodo)
         signals_dict_last = {}
         combined_signal_last = {}
         
-        # Señales hipotéticas (hoy - usando todos los datos disponibles hasta hoy)
+        # Señales hipotéticas (hoy - usando todos los datos disponibles)
         signals_dict_current = {}
         combined_signal_current = {}
         
-        # Calcular señales individuales - ÚLTIMA (REAL) - usando df_filtered (hasta la fecha final seleccionada)
+        # Calcular señales individuales - ÚLTIMA (REAL) - usando df_filtered
         for s in active:
             if s == "DAA KELLER":
                 try:
                     sig_last = weights_daa(df_filtered, **ALL_STRATEGIES[s])
                     if sig_last and len(sig_last) > 0:
                         signals_dict_last[s] = sig_last[-1][1]
+                        print(f"DAA KELLER - Última señal real fecha: {sig_last[-1][0]}")
                     else:
                         signals_dict_last[s] = {}
-                except:
+                except Exception as e:
+                    print(f"Error calculando señal DAA KELLER real: {e}")
                     signals_dict_last[s] = {}
             else:
                 try:
@@ -299,21 +318,25 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                           ALL_STRATEGIES[s]["fill"])
                     if sig_last and len(sig_last) > 0:
                         signals_dict_last[s] = sig_last[-1][1]
+                        print(f"{s} - Última señal real fecha: {sig_last[-1][0]}")
                     else:
                         signals_dict_last[s] = {}
-                except:
+                except Exception as e:
+                    print(f"Error calculando señal {s} real: {e}")
                     signals_dict_last[s] = {}
         
-        # Calcular señales individuales - ACTUAL (HIPOTÉTICA) - usando df completo (hasta hoy)
+        # Calcular señales individuales - ACTUAL (HIPOTÉTICA) - usando df completo
         for s in active:
             if s == "DAA KELLER":
                 try:
                     sig_current = weights_daa(df, **ALL_STRATEGIES[s])
                     if sig_current and len(sig_current) > 0:
                         signals_dict_current[s] = sig_current[-1][1]
+                        print(f"DAA KELLER - Señal hipotética fecha: {sig_current[-1][0]}")
                     else:
                         signals_dict_current[s] = {}
-                except:
+                except Exception as e:
+                    print(f"Error calculando señal DAA KELLER hipotética: {e}")
                     signals_dict_current[s] = {}
             else:
                 try:
@@ -321,9 +344,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                              ALL_STRATEGIES[s]["fill"])
                     if sig_current and len(sig_current) > 0:
                         signals_dict_current[s] = sig_current[-1][1]
+                        print(f"{s} - Señal hipotética fecha: {sig_current[-1][0]}")
                     else:
                         signals_dict_current[s] = {}
-                except:
+                except Exception as e:
+                    print(f"Error calculando señal {s} hipotética: {e}")
                     signals_dict_current[s] = {}
         
         # Calcular señales combinadas
@@ -348,13 +373,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             if s == "DAA KELLER":
                 try:
                     sig = weights_daa(df_filtered, **ALL_STRATEGIES[s])
-                except:
+                except Exception as e:
+                    print(f"Error series individuales DAA KELLER: {e}")
                     sig = []
             else:
                 try:
                     sig = weights_roc4(df_filtered, ALL_STRATEGIES[s]["universe"],
                                      ALL_STRATEGIES[s]["fill"])
-                except:
+                except Exception as e:
+                    print(f"Error series individuales {s}: {e}")
                     sig = []
             
             eq = [initial_capital]
@@ -374,9 +401,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                         if df_filtered.iloc[i-1][t] != 0 and not pd.isna(df_filtered.iloc[i-1][t]) and not pd.isna(df_filtered.iloc[i][t]):
                                             asset_ret = (df_filtered.iloc[i][t] / df_filtered.iloc[i-1][t]) - 1
                                             ret += weight * asset_ret
-                                    except:
+                                    except Exception as e:
+                                        print(f"Error en retorno individual para {t}: {e}")
                                         pass
-                except:
+                except Exception as e:
+                    print(f"Error en cálculo individual: {e}")
                     pass
                 
                 eq.append(eq[-1] * (1 + ret))
@@ -486,7 +515,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             st.write("No hay suficientes datos para correlaciones")
                     else:
                         st.write("No hay suficientes datos para correlaciones")
-                except:
+                except Exception as e:
+                    print(f"Error en correlaciones: {e}")
                     try:
                         relevant_cols = [col for col in corr.columns if col in active or col == "SPY"]
                         if len(relevant_cols) > 1:
@@ -497,7 +527,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                 st.write("No hay suficientes datos para correlaciones")
                         else:
                             st.write("No hay suficientes datos para correlaciones")
-                    except:
+                    except Exception as e2:
                         st.write("No se pueden calcular correlaciones")
             else:
                 st.write("No hay datos suficientes para calcular correlaciones")
