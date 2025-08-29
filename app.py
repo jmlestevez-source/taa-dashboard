@@ -29,91 +29,109 @@ DUAL_ROC4 = {
 ALL_STRATEGIES = {"DAA KELLER": DAA_KELLER, "Dual Momentum ROC4": DUAL_ROC4}
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
-# API Keys y control de límites
-FMP_KEYS = ["6cb32e81af450a825085ffeef279c5c2", "FedUgaGEN9Pv19qgVxh2nHw0JWg5V6uh","P95gSmpsyRFELMKi8t7tSC0tn5y5JBlg"]
-API_CALLS = defaultdict(int)  # Contador de llamadas por key
-API_LIMIT = 250  # Límite de llamadas por día
+# Alpha Vantage API Keys y control de límites
+AV_KEYS = ["L7NEV3XRBLT28NSK"]  # Añade más keys aquí si las tienes
+AV_CALLS = defaultdict(int)  # Contador de llamadas por key
+AV_LIMIT_PER_MINUTE = 5
+AV_LIMIT_PER_DAY = 500
 
-def get_available_api_key():
+def get_available_av_key():
     """Obtiene una API key disponible que no haya alcanzado el límite"""
-    # Primero intentar keys que no han alcanzado el límite
-    available_keys = [key for key in FMP_KEYS if API_CALLS[key] < API_LIMIT]
+    # Primero intentar keys que no han alcanzado el límite diario
+    available_keys = [key for key in AV_KEYS if AV_CALLS[key] < AV_LIMIT_PER_DAY]
     
     if available_keys:
         return random.choice(available_keys)
     
     # Si todas han alcanzado el límite, usar la que menos llamadas tenga
-    st.warning("⚠️ Todas las API keys han alcanzado el límite. Usando la key con menos llamadas.")
-    return min(FMP_KEYS, key=lambda k: API_CALLS[k])
+    st.warning("⚠️ Todas las API keys de Alpha Vantage han alcanzado el límite diario. Usando la key con menos llamadas.")
+    return min(AV_KEYS, key=lambda k: AV_CALLS[k])
 
-def fmp_key(): return random.choice(FMP_KEYS)
-
-# ------------- DESCARGA -------------
+# ------------- DESCARGA (Alpha Vantage) -------------
 @st.cache_data(show_spinner=False)
-def fmp_monthly(ticker, start, end):
+def av_monthly(ticker):
     max_retries = 3
     for attempt in range(max_retries):
         try:
             # Obtener una API key disponible
-            api_key = get_available_api_key()
+            api_key = get_available_av_key()
             
-            url = (f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}"
-                   f"?from={start.strftime('%Y-%m-%d')}&to={end.strftime('%Y-%m-%d')}&apikey={api_key}")
+            # URL para datos mensuales (TIME_SERIES_MONTHLY)
+            url = f'https://www.alphavantage.co/query?function=TIME_SERIES_MONTHLY_ADJUSTED&symbol={ticker}&apikey={api_key}'
             
-            # Añadir delay para evitar sobrecarga
-            time.sleep(0.3)
+            # Añadir delay para respetar el límite de 5 llamadas por minuto
+            time.sleep(15)  # 60 segundos / 5 llamadas = 12 segundos. Usamos 15 para margen.
             
             r = requests.get(url, timeout=30)
             
             # Incrementar contador de llamadas
-            API_CALLS[api_key] += 1
+            AV_CALLS[api_key] += 1
             
-            if r.status_code == 429:
-                st.warning(f"⚠️ Límite alcanzado para key {api_key[:10]}... Intentando con otra key")
-                # Forzar rotación de key en el próximo intento
-                continue
-                
             if r.status_code != 200:
-                st.warning(f"⚠️ Error HTTP {r.status_code} para {ticker} (key: {api_key[:10]}...)")
+                st.warning(f"⚠️ Error HTTP {r.status_code} para {ticker} (key: {api_key[:5]}...)")
                 if attempt < max_retries - 1:
-                    time.sleep(1 * (2 ** attempt))  # Backoff exponencial
+                    time.sleep(30 * (2 ** attempt))  # Backoff exponencial
+                    continue
+                return pd.DataFrame()
+            
+            data = r.json()
+            
+            # Verificar si hay mensaje de error (como superar límite)
+            if "Error Message" in data:
+                st.error(f"❌ Error de Alpha Vantage para {ticker}: {data.get('Error Message', 'Unknown error')}")
+                if attempt < max_retries - 1:
+                    time.sleep(60)  # Esperar más si es un error de límite
+                    continue
+                return pd.DataFrame()
+            
+            if "Note" in data:
+                st.warning(f"⚠️ Nota de Alpha Vantage para {ticker}: {data.get('Note', 'API call limit reached')}")
+                if attempt < max_retries - 1:
+                    time.sleep(60)  # Esperar más si es un aviso de límite
                     continue
                 return pd.DataFrame()
                 
-            hist = r.json().get("historical", [])
-            if not hist:
+            if "Monthly Adjusted Time Series" not in data:
+                st.warning(f"⚠️ Datos no encontrados para {ticker}")
                 return pd.DataFrame()
-                
-            df = pd.DataFrame(hist)
-            if df.empty:
-                return pd.DataFrame()
-                
-            df["date"] = pd.to_datetime(df["date"])
-            df = df.sort_values("date").set_index("date")
-            result = df["close"].resample("ME").last().to_frame(ticker)
             
-            st.write(f"✅ {ticker} descargado con key {api_key[:10]}... ({API_CALLS[api_key]}/{API_LIMIT})")
-            return result
+            ts_data = data["Monthly Adjusted Time Series"]
+            
+            # Convertir a DataFrame
+            df = pd.DataFrame.from_dict(ts_data, orient='index')
+            df.index = pd.to_datetime(df.index)
+            df = df.sort_index()
+            
+            # Seleccionar el precio de cierre ajustado y renombrar
+            df = df[['5. adjusted close']].rename(columns={'5. adjusted close': ticker})
+            df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
+            
+            # Resamplear a fin de mes si es necesario (los datos de AV ya son mensuales)
+            # Pero nos aseguramos de que la fecha sea el último día del mes
+            df.index = df.index.to_period('M').to_timestamp('M')
+            
+            st.write(f"✅ {ticker} descargado con key {api_key[:5]}... ({AV_CALLS[api_key]}/{AV_LIMIT_PER_DAY})")
+            return df
             
         except Exception as e:
             st.error(f"❌ Error descargando {ticker} (intento {attempt + 1}): {e}")
             if attempt < max_retries - 1:
-                time.sleep(1 * (2 ** attempt))  # Backoff exponencial
+                time.sleep(30 * (2 ** attempt))  # Backoff exponencial
     
     return pd.DataFrame()
 
-def download_once(tickers, start, end):
-    st.info("📥 Descargando datos únicos…")
+def download_once_av(tickers):
+    st.info("📥 Descargando datos de Alpha Vantage…")
     data, bar = {}, st.progress(0)
     total_tickers = len(tickers)
     
     for idx, tk in enumerate(tickers):
         try:
             bar.progress((idx + 1) / total_tickers)
-            df = fmp_monthly(tk, start, end)
+            df = av_monthly(tk)
             if not df.empty and len(df) > 0:
                 data[tk] = df
-                st.write(f"✅ {tk} añadido - {len(df)} registros")
+                st.write(f"✅ {tk} añadido - {len(df)} registros (hasta {df.index[-1].strftime('%Y-%m-%d') if len(df) > 0 else 'N/A'})")
             else:
                 st.warning(f"⚠️ {tk} no disponible")
         except Exception as e:
@@ -122,10 +140,10 @@ def download_once(tickers, start, end):
     bar.empty()
     
     # Mostrar estadísticas de uso de API
-    st.subheader("📊 Uso de API Keys")
-    for key, calls in API_CALLS.items():
-        percentage = (calls / API_LIMIT) * 100
-        st.write(f"Key {key[:10]}...: {calls}/{API_LIMIT} llamadas ({percentage:.1f}%)")
+    st.subheader("📊 Uso de API Keys de Alpha Vantage")
+    for key, calls in AV_CALLS.items():
+        percentage = (calls / AV_LIMIT_PER_DAY) * 100
+        st.write(f"Key {key[:5]}...: {calls}/{AV_LIMIT_PER_DAY} llamadas ({percentage:.1f}%)")
     
     return data
 
@@ -184,7 +202,6 @@ def weights_daa(df, risky, protect, canary):
         return [(df.index[-1], {})] if len(df) > 0 else []
     
     sig = []
-    start_idx = max(5, min(5, len(df)))  # Asegurar que no excedemos el índice
     
     for i in range(5, len(df)):  # Comenzar desde el índice 5
         try:
@@ -266,16 +283,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         all_tickers_needed.add("SPY")  # Siempre necesitamos SPY para benchmark
         
         tickers = list(all_tickers_needed)
-        st.write(f"📊 Tickers a descargar: {tickers}")
+        st.write(f"📊 Tickers a descargar de Alpha Vantage: {tickers}")
         
-        # Extender el rango de fechas
-        extended_start = start_date - timedelta(days=365*3)  # 3 años antes
-        extended_end = end_date + timedelta(days=30)  # 1 mes después
-        
-        # Descargar datos
-        raw = download_once(tickers, extended_start, extended_end)
+        # Descargar datos de Alpha Vantage
+        raw = download_once_av(tickers)
         if not raw:
-            st.error("❌ No se pudieron descargar datos suficientes.")
+            st.error("❌ No se pudieron descargar datos suficientes de Alpha Vantage.")
             st.stop()
             
         # Alinear datos
@@ -284,7 +297,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.error("❌ No hay datos suficientes para el análisis.")
             st.stop()
         
-        st.success(f"✅ Datos descargados y alineados: {df.shape}")
+        st.success(f"✅ Datos descargados y alineados de Alpha Vantage: {df.shape}")
         
         # Filtrar al rango de fechas del usuario
         df_filtered = df[(df.index >= pd.Timestamp(start_date)) & (df.index <= pd.Timestamp(end_date))]
