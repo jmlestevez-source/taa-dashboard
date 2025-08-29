@@ -316,8 +316,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         extended_start = start_date - timedelta(days=365*3)  # 3 años antes
         extended_end = end_date + timedelta(days=30)  # 1 mes después
         
+        # Convertir fechas a pd.Timestamp para consistencia
+        extended_start_ts = pd.Timestamp(extended_start)
+        extended_end_ts = pd.Timestamp(extended_end)
+        
         # Descargar datos
-        raw = download_all_data(tickers, extended_start, extended_end)
+        raw = download_all_data(tickers, extended_start_ts, extended_end_ts)
         if not raw:
             st.error("❌ No se pudieron descargar datos suficientes.")
             st.stop()
@@ -341,6 +345,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         
         # Convertir a datetime para evitar problemas de comparación
         last_month_end_for_real_signal = pd.Timestamp(last_month_end_for_real_signal)
+        
+        # Asegurar que el índice del DataFrame también sea pd.Timestamp para consistencia
+        df.index = pd.to_datetime(df.index)
         
         # Filtrar datos hasta la fecha límite
         df_up_to_last_month_end = df[df.index <= last_month_end_for_real_signal]
@@ -454,12 +461,13 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             # Crear series
             comb_series = pd.Series(portfolio, index=dates_for_portfolio)
             
-            # Crear SPY benchmark
+            # Crear SPY benchmark - Asegurar reindexación correcta
             if "SPY" in df_filtered.columns:
                 spy_prices = df_filtered["SPY"]
                 if len(spy_prices) > 0 and spy_prices.iloc[0] > 0 and not pd.isna(spy_prices.iloc[0]):
                     spy_series = (spy_prices / spy_prices.iloc[0] * initial_capital)
-                    spy_series = spy_series.reindex(comb_series.index).ffill()
+                    # Reindexar SPY para que coincida con comb_series
+                    spy_series = spy_series.reindex(comb_series.index, method='ffill').fillna(method='ffill').fillna(method='bfill')
                 else:
                     spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
             else:
@@ -472,7 +480,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     spy_filtered_for_benchmark = spy_full[(spy_full.index >= start_date_ts) & (spy_full.index <= end_date_ts)]
                     if len(spy_filtered_for_benchmark) > 0 and spy_filtered_for_benchmark.iloc[0] > 0 and not pd.isna(spy_filtered_for_benchmark.iloc[0]):
                         spy_series = (spy_filtered_for_benchmark / spy_filtered_for_benchmark.iloc[0] * initial_capital)
-                        spy_series = spy_series.reindex(comb_series.index).ffill()
+                        # Reindexar SPY para que coincida con comb_series
+                        spy_series = spy_series.reindex(comb_series.index, method='ffill').fillna(method='ffill').fillna(method='bfill')
                     else:
                         spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                 else:
@@ -527,7 +536,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         individual_dates.append(df_filtered.index[i])
                 
                 ser = pd.Series(eq, index=individual_dates)
-                ser = ser.reindex(comb_series.index).ffill()
+                # Reindexar correctamente la serie individual
+                ser = ser.reindex(comb_series.index, method='ffill').fillna(method='ffill').fillna(method='bfill')
                 ind_series[s] = ser
                 ind_metrics[s] = calc_metrics(ser.pct_change().dropna())
                 
