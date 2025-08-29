@@ -658,7 +658,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 ind_series[s] = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                 ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
 
-        # ---------- MOSTRAR RESULTADOS ----------
+# ---------- MOSTRAR RESULTADOS ----------
         try:
             # Pestañas
             tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
@@ -666,6 +666,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             
             # ---- TAB 0: COMBINADA ----
             with tabs[0]:
+                # Añade estos mensajes de debug antes de mostrar las señales:
+                st.write(f"📊 Rango de datos completo: {df.index.min().strftime('%Y-%m-%d')} a {df.index.max().strftime('%Y-%m-%d')}")
+                st.write(f"📊 Rango de datos para señal Real: {df_up_to_last_month_end.index.min().strftime('%Y-%m-%d')} a {df_up_to_last_month_end.index.max().strftime('%Y-%m-%d')}")
+                st.write(f"📊 Última fecha del mes completo: {last_month_end_for_real_signal.strftime('%Y-%m-%d')}")
+                
                 col1, col2 = st.columns(2)
                 with col1:
                     st.metric("CAGR (Combinada)", f"{met_comb['CAGR']} %")
@@ -696,6 +701,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 with col2:
                     st.write("**Actual (Hipotética):**")
                     st.dataframe(format_signal_for_display(combined_current), use_container_width=True, hide_index=True)
+
+               
 
                 # Gráficos
                 st.subheader("📈 Equity Curve")
