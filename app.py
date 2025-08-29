@@ -29,7 +29,7 @@ DUAL_ROC4 = {
 ALL_STRATEGIES = {"DAA KELLER": DAA_KELLER, "Dual Momentum ROC4": DUAL_ROC4}
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
-FMP_KEYS = ["6cb32e81af450a825085ffeef279c5c2"]
+FMP_KEYS = ["6cb32e81af450a825085ffeef279c5c2", "FedUgaGEN9Pv19qgVxh2nHw0JWg5V6uh","P95gSmpsyRFELMKi8t7tSC0tn5y5JBlg"]  # añade las que tengas
 def fmp_key(): return random.choice(FMP_KEYS)
 
 # ------------- DESCARGA -------------
