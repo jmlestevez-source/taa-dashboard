@@ -137,29 +137,27 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         if df is None or df.empty:
             st.error("Sin datos"); st.stop()
 
-        # --- cálculo de pesos por estrategia y combinación ---
-        portfolio = [initial_capital]
-        combined_weights = []
-        dates = df.index[5:]
-        for dt, i in zip(dates, range(5, len(df))):
-            w_total = {}
-            for s in active:
-                if s == "DAA KELLER":
-                    _, w = weights_daa(df.iloc[:i], **ALL_STRATEGIES[s])[-1]
-                else:
-                    _, w = weights_roc4(df.iloc[:i],
-                                        ALL_STRATEGIES[s]["universe"],
-                                        ALL_STRATEGIES[s]["fill"])[-1]
-                for t, v in w.items():
-                    w_total[t] = w_total.get(t, 0) + v / len(active)
+                    # --- cálculo de pesos por estrategia y combinación ---
+            portfolio = [initial_capital]
+            # empezamos en la fila 5 (índice 5)
+            for i in range(5, len(df)):
+                w_total = {}
+                for s in active:
+                    if s == "DAA KELLER":
+                        _, w = weights_daa(df.iloc[:i], **ALL_STRATEGIES[s])[-1]
+                    else:
+                        _, w = weights_roc4(df.iloc[:i],
+                                            ALL_STRATEGIES[s]["universe"],
+                                            ALL_STRATEGIES[s]["fill"])[-1]
+                    for t, v in w.items():
+                        w_total[t] = w_total.get(t, 0) + v / len(active)
 
-            ret = sum(w_total.get(t,0)*(df.iloc[i][t]/df.iloc[i-1][t]-1) for t in w_total)
-            portfolio.append(portfolio[-1]*(1+ret))
-            combined_weights.append((dt, w_total))
+                ret = sum(w_total.get(t,0)*(df.iloc[i][t]/df.iloc[i-1][t]-1) for t in w_total)
+                portfolio.append(portfolio[-1]*(1+ret))
 
-        # --- series finales alineadas ---
-        comb_series = pd.Series(portfolio, index=dates)
-        spy_series  = (df["SPY"]/df["SPY"].iloc[0])*initial_capital
+            # --- series alineadas con df[5:] ---
+            comb_series = pd.Series(portfolio, index=df.index[5:])
+            spy_series  = (df["SPY"]/df["SPY"].iloc[0]*initial_capital).iloc[5:]
         spy_series  = spy_series.reindex(dates)
         met_comb = calc_metrics(comb_series.pct_change().dropna())
         met_spy  = calc_metrics(spy_series.pct_change().dropna())
