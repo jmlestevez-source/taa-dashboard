@@ -332,6 +332,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         # Encontrar la fecha del último día del mes completo en df (señal "Real")
         last_data_date = df.index.max()
         last_month_end_for_real_signal = last_data_date.to_period('M').to_timestamp('M')
+        
+        # Convertir a datetime para evitar problemas de comparación
+        last_month_end_for_real_signal = pd.Timestamp(last_month_end_for_real_signal)
+        
+        # Filtrar datos hasta la fecha límite
         df_up_to_last_month_end = df[df.index <= last_month_end_for_real_signal]
         st.write(f"🗓️ Fecha límite para señal 'Real': {last_month_end_for_real_signal.strftime('%Y-%m-%d')}")
         
@@ -371,7 +376,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 signals_dict_current[s] = {}
 
         # Filtrar al rango de fechas del usuario PARA LOS CÁLCULOS DE EQUITY
-        df_filtered = df[(df.index >= pd.Timestamp(start_date)) & (df.index <= pd.Timestamp(end_date))]
+        # Convertir fechas a pd.Timestamp para consistencia
+        start_date_ts = pd.Timestamp(start_date)
+        end_date_ts = pd.Timestamp(end_date)
+        df_filtered = df[(df.index >= start_date_ts) & (df.index <= end_date_ts)]
         if df_filtered.empty:
             st.error("❌ No hay datos en el rango de fechas seleccionado.")
             st.stop()
@@ -452,7 +460,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 # Si SPY no está disponible en el periodo filtrado, usar el disponible
                 if "SPY" in df.columns:
                     spy_full = df["SPY"]
-                    spy_filtered_for_benchmark = spy_full[(spy_full.index >= pd.Timestamp(start_date)) & (spy_full.index <= pd.Timestamp(end_date))]
+                    # Convertir fechas para consistencia
+                    start_date_ts = pd.Timestamp(start_date)
+                    end_date_ts = pd.Timestamp(end_date)
+                    spy_filtered_for_benchmark = spy_full[(spy_full.index >= start_date_ts) & (spy_full.index <= end_date_ts)]
                     if len(spy_filtered_for_benchmark) > 0 and spy_filtered_for_benchmark.iloc[0] > 0 and not pd.isna(spy_filtered_for_benchmark.iloc[0]):
                         spy_series = (spy_filtered_for_benchmark / spy_filtered_for_benchmark.iloc[0] * initial_capital)
                         spy_series = spy_series.reindex(comb_series.index).ffill()
