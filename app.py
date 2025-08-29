@@ -14,7 +14,7 @@ st.title("🎯 Multi-Strategy Tactical Asset Allocation")
 # ------------- SIDEBAR -------------
 initial_capital = st.sidebar.number_input("💰 Capital Inicial ($)", 1000, 10_000_000, 100_000, 1000)
 start_date = st.sidebar.date_input("Fecha de inicio", datetime(2015, 1, 1))
-end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today()))
+end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today())
 
 DAA_KELLER = {
     "risky":   ['SPY','IWM','QQQ','VGK','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD'],
