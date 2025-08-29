@@ -79,7 +79,8 @@ def clean_and_align(data_dict):
 # ------------- UTILS -------------
 def momentum_score(df, col):
     if len(df) < 5 or col not in df.columns: return 0
-    if df[col].iloc[-5] == 0: return 0
+    if df[col].iloc[-5] == 0 or pd.isna(df[col].iloc[-5]): return 0
+    if df[col].iloc[-5] <= 0: return 0
     return (df[col].iloc[-1] / df[col].iloc[-5]) - 1
 
 def calc_metrics(rets):
@@ -97,50 +98,79 @@ def calc_metrics(rets):
 
 # ------------- MOTORES -------------
 def weights_daa(df, risky, protect, canary):
+    if len(df) < 6:  # Necesitamos al menos 6 puntos para calcular momentum
+        return [(df.index[-1], {})] if len(df) > 0 else []
+    
     sig = []
-    for i in range(5, len(df)):
-        can = {s: momentum_score(df.iloc[:i], s) for s in canary if s in df.columns}
-        ris = {s: momentum_score(df.iloc[:i], s) for s in risky  if s in df.columns}
-        pro = {s: momentum_score(df.iloc[:i], s) for s in protect if s in df.columns}
-        n = sum(1 for v in can.values() if v <= 0)
-        if n == 2 and pro:
-            w = {max(pro, key=pro.get): 1.0}
-        elif n == 1 and pro and ris:
-            top_p = max(pro, key=pro.get) if pro else None
-            top_r = sorted(ris, key=ris.get, reverse=True)[:6] if ris else []
-            if top_p and top_r:
-                w = {top_p: 0.5}
-                w.update({t: 0.5/6 for t in top_r})
-            elif top_r:
-                w = {t: 1/6 for t in top_r}
-            else:
-                w = {}
-        elif ris:
-            top_r = sorted(ris, key=ris.get, reverse=True)[:6]
-            w = {t: 1/6 for t in top_r}
-        else:
+    start_idx = max(5, min(5, len(df)-1))  # Asegurar que no excedemos el índice
+    
+    for i in range(start_idx, len(df)):
+        try:
+            # Calcular momentum para cada categoría
+            can = {s: momentum_score(df.iloc[:i+1], s) for s in canary if s in df.columns}
+            ris = {s: momentum_score(df.iloc[:i+1], s) for s in risky  if s in df.columns}
+            pro = {s: momentum_score(df.iloc[:i+1], s) for s in protect if s in df.columns}
+            
+            n = sum(1 for v in can.values() if v <= 0)
             w = {}
-        sig.append((df.index[i], w))
+            
+            if n == 2 and pro:
+                # Regla de protección: todo en protect
+                if pro:
+                    top_p = max(pro, key=pro.get)
+                    w = {top_p: 1.0}
+            elif n == 1 and pro and ris:
+                # Regla mixta: 50% protect, 50% risky
+                top_p = max(pro, key=pro.get) if pro else None
+                top_r = sorted(ris, key=ris.get, reverse=True)[:6] if ris else []
+                if top_p and top_r:
+                    w = {top_p: 0.5}
+                    w.update({t: 0.5/6 for t in top_r})
+            elif ris:
+                # Regla normal: solo risky
+                top_r = sorted(ris, key=ris.get, reverse=True)[:6]
+                if top_r:
+                    w = {t: 1/6 for t in top_r}
+            
+            sig.append((df.index[i], w))
+        except Exception as e:
+            print(f"Error en weights_daa para índice {i}: {e}")
+            sig.append((df.index[i], {}))
+    
     return sig if sig else [(df.index[-1], {})]
 
 def weights_roc4(df, universe, fill):
+    if len(df) < 6:  # Necesitamos al menos 6 puntos
+        return [(df.index[-1], {})] if len(df) > 0 else []
+    
     sig = []
     base = 1/6
-    for i in range(5, len(df)):
-        roc = {s: momentum_score(df.iloc[:i], s) for s in universe if s in df.columns}
-        fill_roc = {s: momentum_score(df.iloc[:i], s) for s in fill if s in df.columns}
-        positive = [s for s, v in roc.items() if v > 0]
-        selected = sorted(positive, key=lambda s: roc[s], reverse=True)[:6]
-        n_sel = len(selected)
-        weights = {}
-        for s in selected:
-            weights[s] = base
-        if n_sel < 6 and fill_roc:
-            if fill_roc:
-                best = max(fill_roc, key=fill_roc.get)
-                extra = (6 - n_sel) * base
-                weights[best] = weights.get(best, 0) + extra
-        sig.append((df.index[i], weights))
+    start_idx = max(5, min(5, len(df)-1))  # Asegurar que no excedemos el índice
+    
+    for i in range(start_idx, len(df)):
+        try:
+            roc = {s: momentum_score(df.iloc[:i+1], s) for s in universe if s in df.columns}
+            fill_roc = {s: momentum_score(df.iloc[:i+1], s) for s in fill if s in df.columns}
+            
+            positive = [s for s, v in roc.items() if v > 0]
+            selected = sorted(positive, key=lambda s: roc[s], reverse=True)[:6]
+            n_sel = len(selected)
+            
+            weights = {}
+            for s in selected:
+                weights[s] = base
+            
+            if n_sel < 6 and fill_roc:
+                if fill_roc:
+                    best = max(fill_roc, key=fill_roc.get)
+                    extra = (6 - n_sel) * base
+                    weights[best] = weights.get(best, 0) + extra
+            
+            sig.append((df.index[i], weights))
+        except Exception as e:
+            print(f"Error en weights_roc4 para índice {i}: {e}")
+            sig.append((df.index[i], {}))
+    
     return sig if sig else [(df.index[-1], {})]
 
 # ------------- MAIN -------------
@@ -169,44 +199,60 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
 
         # --- cálculo de pesos por estrategia y combinación ---
         portfolio = [initial_capital]
-        dates_for_portfolio = [df.index[4]]  # Fecha inicial
+        dates_for_portfolio = []
         
-        for i in range(5, len(df)):
+        # Asegurar que tenemos suficientes datos
+        if len(df) < 6:
+            st.error("❌ No hay suficientes datos históricos para el análisis.")
+            st.stop()
+        
+        # Empezar desde el índice 5 (mes 6) para tener suficientes datos
+        start_calc_index = 5
+        if start_calc_index >= len(df):
+            start_calc_index = len(df) - 1
+            
+        dates_for_portfolio.append(df.index[start_calc_index-1])  # Fecha inicial
+        
+        for i in range(start_calc_index, len(df)):
             w_total = {}
             for s in active:
                 if s == "DAA KELLER":
                     try:
                         sig_result = weights_daa(df.iloc[:i+1], **ALL_STRATEGIES[s])
-                        if sig_result:
+                        if sig_result and len(sig_result) > 0:
                             _, w = sig_result[-1]
                         else:
                             w = {}
-                    except:
+                    except Exception as e:
+                        print(f"Error DAA KELLER en índice {i}: {e}")
                         w = {}
                 else:
                     try:
                         sig_result = weights_roc4(df.iloc[:i+1],
                                                 ALL_STRATEGIES[s]["universe"],
                                                 ALL_STRATEGIES[s]["fill"])
-                        if sig_result:
+                        if sig_result and len(sig_result) > 0:
                             _, w = sig_result[-1]
                         else:
                             w = {}
-                    except:
+                    except Exception as e:
+                        print(f"Error ROC4 en índice {i}: {e}")
                         w = {}
                 
+                # Acumular pesos ponderados
                 for t, v in w.items():
                     w_total[t] = w_total.get(t, 0) + v / len(active)
 
-            # Calcular retorno
+            # Calcular retorno de la cartera combinada
             ret = 0
             for t, weight in w_total.items():
-                if t in df.columns and i > 0 and i < len(df):
+                if t in df.columns and i > 0:
                     try:
-                        if df.iloc[i-1][t] != 0:
+                        if df.iloc[i-1][t] != 0 and not pd.isna(df.iloc[i-1][t]) and not pd.isna(df.iloc[i][t]):
                             asset_ret = (df.iloc[i][t] / df.iloc[i-1][t]) - 1
                             ret += weight * asset_ret
-                    except:
+                    except Exception as e:
+                        print(f"Error calculando retorno para {t}: {e}")
                         pass
             
             portfolio.append(portfolio[-1] * (1 + ret))
@@ -215,35 +261,48 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         # --- series alineadas ---
         comb_series = pd.Series(portfolio, index=dates_for_portfolio)
         
-        # Crear SPY series correctamente alineada con el dataframe original
+        # Crear SPY series correctamente alineada
         if "SPY" in df.columns:
             spy_prices = df["SPY"]
-            spy_series = (spy_prices / spy_prices.iloc[4] * initial_capital)
-            # Alinear con las mismas fechas que comb_series
-            spy_series = spy_series.reindex(comb_series.index).ffill()
+            # Asegurar que no hay divisiones por cero
+            if spy_prices.iloc[0] > 0:
+                spy_series = (spy_prices / spy_prices.iloc[0] * initial_capital)
+                # Alinear con las mismas fechas que comb_series
+                spy_series = spy_series.reindex(comb_series.index).ffill()
+            else:
+                # Fallback si hay problemas con SPY
+                spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
         else:
-            # Fallback si no hay SPY
+            # Fallback si no hay SPY en los datos
             spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
 
         met_comb = calc_metrics(comb_series.pct_change().dropna())
         met_spy = calc_metrics(spy_series.pct_change().dropna())
 
-        # --- calcular señales actuales (hipotéticas) ---
-        signals_dict_last = {}  # Señales a cierre del mes anterior
-        signals_dict_current = {}  # Señales actuales
+        # --- calcular señales individuales y combinadas ---
+        signals_dict_last = {}  # Señales a cierre del mes anterior (real)
+        signals_dict_current = {}  # Señales actuales (hipotéticas)
+        combined_signal_last = {}  # Señal combinada real
+        combined_signal_current = {}  # Señal combinada hipotética
         
+        # Calcular señales individuales
         for s in active:
             if s == "DAA KELLER":
                 try:
                     # Señal del último mes (real)
                     sig_last = weights_daa(df, **ALL_STRATEGIES[s])
-                    if sig_last:
+                    if sig_last and len(sig_last) > 0:
                         signals_dict_last[s] = sig_last[-1][1]
-                    # Señal actual (hipotética) - usando todo el dataframe
+                    else:
+                        signals_dict_last[s] = {}
+                    # Señal actual (hipotética)
                     sig_current = weights_daa(df, **ALL_STRATEGIES[s])
-                    if sig_current:
+                    if sig_current and len(sig_current) > 0:
                         signals_dict_current[s] = sig_current[-1][1]
-                except:
+                    else:
+                        signals_dict_current[s] = {}
+                except Exception as e:
+                    print(f"Error calculando señales DAA KELLER: {e}")
                     signals_dict_last[s] = {}
                     signals_dict_current[s] = {}
             else:
@@ -251,16 +310,38 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     # Señal del último mes (real)
                     sig_last = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
                                           ALL_STRATEGIES[s]["fill"])
-                    if sig_last:
+                    if sig_last and len(sig_last) > 0:
                         signals_dict_last[s] = sig_last[-1][1]
-                    # Señal actual (hipotética) - usando todo el dataframe
+                    else:
+                        signals_dict_last[s] = {}
+                    # Señal actual (hipotética)
                     sig_current = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
                                              ALL_STRATEGIES[s]["fill"])
-                    if sig_current:
+                    if sig_current and len(sig_current) > 0:
                         signals_dict_current[s] = sig_current[-1][1]
-                except:
+                    else:
+                        signals_dict_current[s] = {}
+                except Exception as e:
+                    print(f"Error calculando señales ROC4: {e}")
                     signals_dict_last[s] = {}
                     signals_dict_current[s] = {}
+        
+        # Calcular señales combinadas
+        combined_signal_last = {}
+        combined_signal_current = {}
+        
+        for s in active:
+            # Señal combinada última (real)
+            if s in signals_dict_last:
+                signal = signals_dict_last[s]
+                for ticker, weight in signal.items():
+                    combined_signal_last[ticker] = combined_signal_last.get(ticker, 0) + weight / len(active)
+            
+            # Señal combinada actual (hipotética)
+            if s in signals_dict_current:
+                signal = signals_dict_current[s]
+                for ticker, weight in signal.items():
+                    combined_signal_current[ticker] = combined_signal_current.get(ticker, 0) + weight / len(active)
 
         # --- series individuales ---
         ind_series = {}
@@ -279,23 +360,26 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig = []
             
             eq = [initial_capital]
-            individual_dates = [df.index[4]]  # Fecha inicial
+            individual_dates = [df.index[start_calc_index-1]] if start_calc_index > 0 else [df.index[0]]
             
-            for i in range(5, len(df)):
+            for i in range(start_calc_index, len(df)):
                 dt = df.index[i]
                 ret = 0
                 try:
-                    if i-5 < len(sig) and len(sig) > 0:
-                        w = sig[i-5][1] if i-5 < len(sig) else {}
-                        for t, weight in w.items():
-                            if t in df.columns and i > 0:
-                                try:
-                                    if df.iloc[i-1][t] != 0:
-                                        asset_ret = (df.iloc[i][t] / df.iloc[i-1][t]) - 1
-                                        ret += weight * asset_ret
-                                except:
-                                    pass
-                except:
+                    if i - start_calc_index < len(sig) and len(sig) > 0:
+                        idx_sig = i - start_calc_index
+                        if idx_sig < len(sig):
+                            w = sig[idx_sig][1]
+                            for t, weight in w.items():
+                                if t in df.columns and i > 0:
+                                    try:
+                                        if df.iloc[i-1][t] != 0 and not pd.isna(df.iloc[i-1][t]) and not pd.isna(df.iloc[i][t]):
+                                            asset_ret = (df.iloc[i][t] / df.iloc[i-1][t]) - 1
+                                            ret += weight * asset_ret
+                                    except:
+                                        pass
+                except Exception as e:
+                    print(f"Error en cálculo individual para {s} índice {i}: {e}")
                     pass
                 
                 eq.append(eq[-1] * (1 + ret))
@@ -333,10 +417,28 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.metric("Sharpe (Combinada)", met_comb["Sharpe"])
             st.metric("Sharpe (SPY)", met_spy["Sharpe"])
 
-            # Mostrar señales actuales en modo porcentaje - TABLA COMPARATIVA
-            st.subheader("🎯 Señales Comparativas")
+            # Mostrar señales combinadas
+            st.subheader("🎯 Señal Cartera Combinada")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**Última (Real):**")
+                if combined_signal_last:
+                    last_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in combined_signal_last.items()}
+                    st.write(last_pct)
+                else:
+                    st.write("-")
+            with col2:
+                st.write("**Actual (Hipotética):**")
+                if combined_signal_current:
+                    current_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in combined_signal_current.items()}
+                    st.write(current_pct)
+                else:
+                    st.write("-")
+
+            # Mostrar señales individuales - TABLA COMPARATIVA
+            st.subheader("🎯 Señales Individuales Comparativas")
             
-            # Crear tabla comparativa de señales
+            # Crear tabla comparativa de señales individuales
             signals_data = []
             for strategy in active:
                 last_signal = signals_dict_last.get(strategy, {})
@@ -351,7 +453,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     "Actual (Hipotética)": str(current_pct) if current_pct else "-"
                 })
             
-            if signals_data:
+            if signals_
                 signals_df = pd.DataFrame(signals_data)
                 st.dataframe(signals_df, use_container_width=True)
 
@@ -362,98 +464,4 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
             st.plotly_chart(fig, use_container_width=True)
 
-            # Drawdown con relleno y colores distintos
-            dd_comb = (comb_series/comb_series.cummax()-1)*100
-            dd_spy = (spy_series/spy_series.cummax()-1)*100
-            fig_dd = go.Figure()
-            fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada", 
-                                      line=dict(color='red', width=2),
-                                      fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
-            fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY", 
-                                      line=dict(color='orange', width=2, dash="dot"),
-                                      fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
-            fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
-            st.plotly_chart(fig_dd, use_container_width=True)
-
-            # Correlaciones (solo en la pestaña combinada)
-            st.subheader("📊 Correlaciones entre Estrategias")
-            if not corr.empty and "SPY" in corr.index:
-                try:
-                    # Filtrar solo las columnas de estrategias activas + SPY
-                    relevant_cols = [col for col in corr.columns if col in active or col == "SPY"]
-                    if len(relevant_cols) > 1:
-                        corr_display = corr.loc[relevant_cols, relevant_cols]
-                        st.dataframe(corr_display.style.background_gradient(cmap="coolwarm", axis=None))
-                    else:
-                        st.write("No hay suficientes datos para correlaciones")
-                except Exception as e:
-                    try:
-                        relevant_cols = [col for col in corr.columns if col in active or col == "SPY"]
-                        if len(relevant_cols) > 1:
-                            corr_display = corr.loc[relevant_cols, relevant_cols]
-                            st.dataframe(corr_display)
-                        else:
-                            st.write("No hay suficientes datos para correlaciones")
-                    except:
-                        st.write("No se pueden calcular correlaciones")
-            else:
-                st.write("No hay datos suficientes para calcular correlaciones")
-
-        # ---- TABS INDIVIDUALES ----
-        for idx, s in enumerate(active, start=1):
-            with tabs[idx]:
-                st.header(s)
-                if s in ind_series:
-                    ser = ind_series[s]
-                    met = calc_metrics(ser.pct_change().dropna())
-
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.metric("CAGR", f"{met['CAGR']} %")
-                        st.metric("MaxDD", f"{met['MaxDD']} %")
-                    with col2:
-                        st.metric("Sharpe", met["Sharpe"])
-                        st.metric("Vol", f"{met['Vol']} %")
-
-                    # Mostrar señales individuales
-                    st.subheader("🎯 Señales")
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.write("**Última (Real):**")
-                        if s in signals_dict_last and signals_dict_last[s]:
-                            last_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in signals_dict_last[s].items()}
-                            st.write(last_pct)
-                        else:
-                            st.write("-")
-                    with col2:
-                        st.write("**Actual (Hipotética):**")
-                        if s in signals_dict_current and signals_dict_current[s]:
-                            current_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in signals_dict_current[s].items()}
-                            st.write(current_pct)
-                        else:
-                            st.write("-")
-
-                    # Equity con colores distintos
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=ser.index, y=ser, name=s, line=dict(color='green', width=3)))
-                    fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
-                    fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
-                    st.plotly_chart(fig, use_container_width=True)
-
-                    # Drawdown con relleno y colores distintos
-                    dd_ind = (ser/ser.cummax()-1)*100
-                    fig_dd = go.Figure()
-                    fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s, 
-                                              line=dict(color='red', width=2),
-                                              fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
-                    fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY", 
-                                              line=dict(color='orange', width=2, dash="dot"),
-                                              fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
-                    fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
-                    st.plotly_chart(fig_dd, use_container_width=True)
-
-                else:
-                    st.write("No hay datos disponibles para esta estrategia")
-
-else:
-    st.info("👈 Configura y ejecuta")
+           
