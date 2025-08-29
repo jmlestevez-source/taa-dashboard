@@ -137,7 +137,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         if df is None or df.empty:
             st.error("Sin datos"); st.stop()
 
-                    # --- cálculo de pesos por estrategia y combinación ---
+            # --- cálculo de pesos por estrategia y combinación ---
             portfolio = [initial_capital]
             # empezamos en la fila 5 (índice 5)
             for i in range(5, len(df)):
@@ -158,7 +158,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             # --- series alineadas con df[5:] ---
             comb_series = pd.Series(portfolio, index=df.index[5:])
             spy_series  = (df["SPY"]/df["SPY"].iloc[0]*initial_capital).iloc[5:]
-        spy_series  = spy_series.reindex(dates)
+        dates = comb_series.index  # Alineamos las fechas con la serie combinada
+        spy_series = spy_series.reindex(dates)
         met_comb = calc_metrics(comb_series.pct_change().dropna())
         met_spy  = calc_metrics(spy_series.pct_change().dropna())
 
