@@ -84,7 +84,7 @@ def av_monthly(ticker):
                     continue
                 return pd.DataFrame()
             
-            if "Note" in 
+            if "Note" in data:
                 st.warning(f"⚠️ Nota de Alpha Vantage para {ticker}: {data.get('Note', 'API call limit reached')}")
                 if attempt < max_retries - 1:
                     time.sleep(60)  # Esperar más si es un aviso de límite
@@ -464,4 +464,4 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 # Si SPY no está disponible en el periodo filtrado, usar el disponible
                 if "SPY" in df.columns:
                     spy_full = df["SPY"]
-                   
+              
