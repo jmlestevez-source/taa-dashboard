@@ -116,7 +116,7 @@ def weights_roc4(df, universe, fill):
             best = max(fill_roc, key=fill_roc.get)
             extra = (6 - n_sel) * base
             weights[best] = weights.get(best, 0) + extra
-        sig.append((df.index[i], w))
+        sig.append((df.index[i], weights))  # Corregido: era 'w' pero debería ser 'weights'
     return sig if sig else [(df.index[-1], {})]
 
 # ------------- MAIN -------------
@@ -137,29 +137,31 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         if df is None or df.empty:
             st.error("Sin datos"); st.stop()
 
-            # --- cálculo de pesos por estrategia y combinación ---
-            portfolio = [initial_capital]
-            # empezamos en la fila 5 (índice 5)
-            for i in range(5, len(df)):
-                w_total = {}
-                for s in active:
-                    if s == "DAA KELLER":
-                        _, w = weights_daa(df.iloc[:i], **ALL_STRATEGIES[s])[-1]
-                    else:
-                        _, w = weights_roc4(df.iloc[:i],
-                                            ALL_STRATEGIES[s]["universe"],
-                                            ALL_STRATEGIES[s]["fill"])[-1]
-                    for t, v in w.items():
-                        w_total[t] = w_total.get(t, 0) + v / len(active)
+        # --- cálculo de pesos por estrategia y combinación ---
+        portfolio = [initial_capital]
+        # empezamos en la fila 5 (índice 5)
+        dates_for_portfolio = []  # Lista para almacenar las fechas correspondientes
+        for i in range(5, len(df)):
+            w_total = {}
+            for s in active:
+                if s == "DAA KELLER":
+                    _, w = weights_daa(df.iloc[:i+1], **ALL_STRATEGIES[s])[-1]
+                else:
+                    _, w = weights_roc4(df.iloc[:i+1],
+                                        ALL_STRATEGIES[s]["universe"],
+                                        ALL_STRATEGIES[s]["fill"])[-1]
+                for t, v in w.items():
+                    w_total[t] = w_total.get(t, 0) + v / len(active)
 
-                ret = sum(w_total.get(t,0)*(df.iloc[i][t]/df.iloc[i-1][t]-1) for t in w_total)
-                portfolio.append(portfolio[-1]*(1+ret))
+            ret = sum(w_total.get(t,0)*(df.iloc[i][t]/df.iloc[i-1][t]-1) for t in w_total)
+            portfolio.append(portfolio[-1]*(1+ret))
+            dates_for_portfolio.append(df.index[i])  # Guardamos la fecha
 
-            # --- series alineadas con df[5:] ---
-            comb_series = pd.Series(portfolio, index=df.index[5:])
-            spy_series  = (df["SPY"]/df["SPY"].iloc[0]*initial_capital).iloc[5:]
-        dates = comb_series.index  # Alineamos las fechas con la serie combinada
-        spy_series = spy_series.reindex(dates)
+        # --- series alineadas ---
+        comb_series = pd.Series(portfolio, index=[df.index[4]] + dates_for_portfolio)  # Incluimos la fecha inicial
+        spy_series  = (df["SPY"]/df["SPY"].iloc[4]*initial_capital)
+        spy_series = spy_series.reindex(comb_series.index)
+
         met_comb = calc_metrics(comb_series.pct_change().dropna())
         met_spy  = calc_metrics(spy_series.pct_change().dropna())
 
@@ -172,15 +174,21 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 sig = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
                                    ALL_STRATEGIES[s]["fill"])
             eq = [initial_capital]
+            individual_dates = [df.index[4]]  # Fecha inicial
             for dt, w in sig:
-                ret = sum(w.get(t,0)*(df.loc[dt,t]/df.shift(1).loc[dt,t]-1) for t in w)
-                eq.append(eq[-1]*(1+ret))
-            ser = pd.Series(eq, index=[sig[0][0]]+[d for d,_ in sig])
-            ser = ser.reindex(dates).fillna(method='ffill')
+                if dt in df.index:
+                    try:
+                        ret = sum(w.get(t,0)*(df.loc[dt,t]/df.shift(1).loc[dt,t]-1) for t in w if t in df.columns)
+                        eq.append(eq[-1]*(1+ret))
+                        individual_dates.append(dt)
+                    except:
+                        pass
+            ser = pd.Series(eq, index=individual_dates)
+            ser = ser.reindex(comb_series.index).fillna(method='ffill')
             ind_series[s] = ser
 
         # DataFrame de retornos para correlaciones
-        ret_df = pd.DataFrame(index=dates)
+        ret_df = pd.DataFrame(index=comb_series.index)
         ret_df["SPY"] = spy_series.pct_change()
         for s in active:
             ret_df[s] = ind_series[s].pct_change()
