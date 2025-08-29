@@ -181,13 +181,29 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 eq.append(eq[-1]*(1+ret))
             ind_series[s] = pd.Series(eq, index=[sig[0][0]]+[d for d,_ in sig])
 
-                    # --- series individuales y correlaciones (sin duplicados) ---
-            ret_dict = {"SPY": spy_series.pct_change()}
+                        # --- series alineadas sin duplicados ni huecos ---
+            # 1) construimos df con retornos mensuales
+            ret_df = pd.DataFrame(index=df.index[5:])
+            ret_df["SPY"] = spy_series.pct_change().dropna()
+
             for s in active:
-                ret_dict[s] = ind_series[s].pct_change()
-            df_ret = pd.DataFrame(ret_dict).dropna()
-            df_ret = df_ret[~df_ret.index.duplicated(keep='first')]  # elimina duplicados
-            corr = df_ret.corr()
+                # serie individual
+                if s == "DAA KELLER":
+                    sig = weights_daa(df, **ALL_STRATEGIES[s])
+                else:
+                    sig = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
+                                       ALL_STRATEGIES[s]["fill"])
+                eq = [initial_capital]
+                for dt, w in sig:
+                    ret = sum(w.get(t,0)*(df.loc[dt,t]/df.shift(1).loc[dt,t]-1) for t in w)
+                    eq.append(eq[-1]*(1+ret))
+                ser = pd.Series(eq, index=[sig[0][0]]+[d for d,_ in sig])
+                # alineamos al índice común y rellenamos NaN → 0
+                ret_df[s] = ser.reindex(ret_df.index).pct_change().fillna(0)
+
+            # 2) eliminamos duplicados y NaN
+            ret_df = ret_df[~ret_df.index.duplicated(keep='first')].dropna()
+            corr = ret_df.corr()    
 
         # ---------- PESTAÑAS ----------
         tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
