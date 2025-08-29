@@ -7,6 +7,9 @@ import requests
 import time
 import random
 from collections import defaultdict
+import os
+import pickle
+import hashlib
 
 # ------------- CONFIG -------------
 st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
@@ -30,10 +33,43 @@ ALL_STRATEGIES = {"DAA KELLER": DAA_KELLER, "Dual Momentum ROC4": DUAL_ROC4}
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
 # Alpha Vantage API Keys y control de límites
-AV_KEYS = ["L7NEV3XRBLT28NSK"]  # Añade más keys aquí si las tienes
+AV_KEYS = ["L7NEV3XRBLT28NSK", "ELIUAT9FCFMSDC52"]  # Añadida la nueva key
 AV_CALLS = defaultdict(int)  # Contador de llamadas por key
 AV_LIMIT_PER_MINUTE = 5
 AV_LIMIT_PER_DAY = 500
+
+# Directorio para la caché
+CACHE_DIR = "cache"
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
+
+def get_cache_filename(ticker, start, end):
+    """Genera un nombre de archivo único para la caché basado en los parámetros"""
+    key = f"{ticker}_{start}_{end}"
+    hash_key = hashlib.md5(key.encode()).hexdigest()
+    return os.path.join(CACHE_DIR, f"{hash_key}.pkl")
+
+def load_from_cache(ticker, start, end):
+    """Carga datos desde la caché si existen"""
+    cache_file = get_cache_filename(ticker, start, end)
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, 'rb') as f:
+                data = pickle.load(f)
+                st.write(f"✅ {ticker} cargado desde caché")
+                return data
+        except Exception as e:
+            st.warning(f"⚠️ Error cargando {ticker} desde caché: {e}")
+    return None
+
+def save_to_cache(ticker, start, end, data):
+    """Guarda datos en la caché"""
+    cache_file = get_cache_filename(ticker, start, end)
+    try:
+        with open(cache_file, 'wb') as f:
+            pickle.dump(data, f)
+    except Exception as e:
+        st.warning(f"⚠️ Error guardando {ticker} en caché: {e}")
 
 def get_available_av_key():
     """Obtiene una API key disponible que no haya alcanzado el límite"""
@@ -48,8 +84,12 @@ def get_available_av_key():
     return min(AV_KEYS, key=lambda k: AV_CALLS[k])
 
 # ------------- DESCARGA (Alpha Vantage) -------------
-@st.cache_data(show_spinner=False)
-def av_monthly(ticker):
+def av_monthly(ticker, start, end):
+    # Intentar cargar desde caché primero
+    cached_data = load_from_cache(ticker, start, end)
+    if cached_data is not None:
+        return cached_data
+    
     max_retries = 3
     for attempt in range(max_retries):
         try:
@@ -113,7 +153,14 @@ def av_monthly(ticker):
             # Asegurarse de que la fecha sea el último día del mes
             df.index = df.index.to_period('M').to_timestamp('M')
             
+            # Filtrar por rango de fechas
+            df = df[(df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))]
+            
             st.write(f"✅ {ticker} descargado con key {api_key[:5]}... ({AV_CALLS[api_key]}/{AV_LIMIT_PER_DAY}) - {len(df)} registros hasta {df.index[-1].strftime('%Y-%m-%d') if len(df) > 0 else 'N/A'}")
+            
+            # Guardar en caché
+            save_to_cache(ticker, start, end, df)
+            
             return df
             
         except Exception as e:
@@ -123,7 +170,8 @@ def av_monthly(ticker):
     
     return pd.DataFrame()
 
-def download_once_av(tickers):
+@st.cache_data(show_spinner=False)
+def download_once_av(tickers, start, end):
     st.info("📥 Descargando datos de Alpha Vantage…")
     data, bar = {}, st.progress(0)
     total_tickers = len(tickers)
@@ -131,7 +179,7 @@ def download_once_av(tickers):
     for idx, tk in enumerate(tickers):
         try:
             bar.progress((idx + 1) / total_tickers)
-            df = av_monthly(tk)
+            df = av_monthly(tk, start, end)
             if not df.empty and len(df) > 0:
                 data[tk] = df
             else:
@@ -322,8 +370,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         tickers = list(all_tickers_needed)
         st.write(f"📊 Tickers a descargar de Alpha Vantage: {tickers}")
         
+        # Extender el rango de fechas para asegurar datos suficientes
+        extended_start = start_date - timedelta(days=365*3)  # 3 años antes
+        extended_end = end_date + timedelta(days=30)  # 1 mes después
+        
         # Descargar datos de Alpha Vantage
-        raw = download_once_av(tickers)
+        raw = download_once_av(tickers, extended_start, extended_end)
         if not raw:
             st.error("❌ No se pudieron descargar datos suficientes de Alpha Vantage.")
             st.stop()
