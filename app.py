@@ -449,7 +449,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     "Actual (Hipotética)": str(current_pct) if current_pct else "-"
                 })
             
-            if signals_:
+            if signals_  # Corregido: signals_data en lugar de signals_
                 signals_df = pd.DataFrame(signals_data)
                 st.dataframe(signals_df, use_container_width=True)
 
