@@ -14,9 +14,8 @@ st.title("🎯 Multi-Strategy Tactical Asset Allocation")
 # ------------- SIDEBAR -------------
 initial_capital = st.sidebar.number_input("💰 Capital Inicial ($)", 1000, 10_000_000, 100_000, 1000)
 start_date = st.sidebar.date_input("Fecha de inicio", datetime(2015, 1, 1))
-end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today())
+end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today()))
 
-# ------------- ESTRATEGIAS -------------
 DAA_KELLER = {
     "risky":   ['SPY','IWM','QQQ','VGK','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD'],
     "protect": ['SHY','IEF','LQD'],
@@ -29,8 +28,7 @@ DUAL_ROC4 = {
 ALL_STRATEGIES = {"DAA KELLER": DAA_KELLER, "Dual Momentum ROC4": DUAL_ROC4}
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
-# ------------- API -------------
-FMP_KEYS = ["6cb32e81af450a825085ffeef279c5c2"]
+FMP_KEYS = ["6cb32e81af450a825085ffeef279c5c2", "FedUgaGEN9Pv19qgVxh2nHw0JWg5V6uh","P95gSmpsyRFELMKi8t7tSC0tn5y5JBlg"]  # añade las que tengas
 def fmp_key(): return random.choice(FMP_KEYS)
 
 # ------------- DESCARGA -------------
@@ -63,11 +61,12 @@ def clean_and_align(data_dict):
 # ------------- UTILS -------------
 def momentum_score(df, col):
     if len(df) < 5: return 0
-    return (df[col].iloc[-1]/df[col].iloc[-5])-1
+    return (df[col].iloc[-1]/df[col].iloc[-5]) - 1
 
 def calc_metrics(rets):
     rets = rets.dropna()
-    if len(rets)==0: return {"CAGR":0,"MaxDD":0,"Sharpe":0,"Vol":0}
+    if len(rets)==0:
+        return {"CAGR":0,"MaxDD":0,"Sharpe":0,"Vol":0}
     eq = (1+rets).cumprod()
     yrs = len(rets)/12
     cagr = eq.iloc[-1]**(1/yrs)-1
@@ -161,63 +160,101 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             met_spy  = calc_metrics(spy_series.pct_change().dropna())
             latest_date, latest_w = combined_weights[-1]
 
-            # ---------- NAVEGACIÓN ----------
+            # --- PREPARAR SERIES INDIVIDUALES ---
+            ind_series = {}
+            for s in active:
+                if s == "DAA KELLER":
+                    sig = weights_daa(df, **ALL_STRATEGIES[s])
+                else:
+                    sig = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
+                                       ALL_STRATEGIES[s]["fill"])
+                eq = [initial_capital]
+                for dt, w in sig:
+                    ret = sum(w.get(t,0)*(df.loc[dt,t]/df.shift(1).loc[dt,t]-1) for t in w)
+                    eq.append(eq[-1]*(1+ret))
+                ind_series[s] = pd.Series(eq, index=[sig[0][0]]+[d for d,_ in sig])
+
+            # --- TABLA DE CORRELACIONES ---
+            df_ret = pd.DataFrame({
+                "SPY": spy_series.pct_change(),
+                **{s: ind_series[s].pct_change() for s in active}
+            }).dropna()
+            corr = df_ret.corr()
+
+            # ---------- PESTAÑAS ----------
             tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
             tabs = st.tabs(tab_names)
 
             # ---- TAB 0: COMBINADA ----
             with tabs[0]:
-                st.subheader("📊 Cartera combinada vs SPY")
-                c1,c2,c3,c4 = st.columns(4)
-                c1.metric("CAGR %", met_comb["CAGR"])
-                c2.metric("MaxDD %", met_comb["MaxDD"])
-                c3.metric("Sharpe", met_comb["Sharpe"])
-                c4.metric("Vol %", met_comb["Vol"])
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("CAGR (Combinada)", f"{met_comb['CAGR']} %")
+                    st.metric("CAGR (SPY)", f"{met_spy['CAGR']} %")
+                with col2:
+                    st.metric("MaxDD (Combinada)", f"{met_comb['MaxDD']} %")
+                    st.metric("MaxDD (SPY)", f"{met_spy['MaxDD']} %")
 
+                st.metric("Sharpe (Combinada)", met_comb["Sharpe"])
+                st.metric("Sharpe (SPY)", met_spy["Sharpe"])
+
+                # Gráfica equity
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=comb_series.index, y=comb_series, name="Combinada"))
                 fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(dash="dash")))
-                fig.update_layout(height=500)
+                fig.update_layout(height=400)
                 st.plotly_chart(fig, use_container_width=True)
 
-                st.subheader("📌 Asignación acumulada")
-                st.write("Último cierre mes anterior:")
-                st.json({k:f"{v*100:.2f}%" for k,v in latest_w.items()})
-                st.write("Asignación actual:")
-                st.json({k:f"{v*100:.2f}%" for k,v in latest_w.items()})
+                # Drawdown
+                dd_comb = (comb_series/comb_series.cummax()-1)*100
+                dd_spy  = (spy_series/spy_series.cummax()-1)*100
+                fig_dd = go.Figure()
+                fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada"))
+                fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY"))
+                fig_dd.update_layout(height=300, yaxis_title="Drawdown %")
+                st.plotly_chart(fig_dd, use_container_width=True)
 
-            # ---- TABS 1…N: INDIVIDUALES ----
+            # ---- TABS INDIVIDUALES ----
             for idx, s in enumerate(active, start=1):
                 with tabs[idx]:
                     st.header(s)
-                    if s == "DAA KELLER":
-                        sig = weights_daa(df, **ALL_STRATEGIES[s])
-                    else:
-                        sig = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
-                                           ALL_STRATEGIES[s]["fill"])
+                    ser = ind_series[s]
+                    met = calc_metrics(ser.pct_change().dropna())
 
-                    eq = [initial_capital]
-                    for dt, w in sig:
-                        ret = sum(w.get(t,0)*(df.loc[dt,t]/df.shift(1).loc[dt,t]-1) for t in w)
-                        eq.append(eq[-1]*(1+ret))
-                    ind_series = pd.Series(eq, index=[sig[0][0]]+[d for d,_ in sig])
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("CAGR", f"{met['CAGR']} %")
+                        st.metric("MaxDD", f"{met['MaxDD']} %")
+                    with col2:
+                        st.metric("Sharpe", met["Sharpe"])
+                        st.metric("Vol", f"{met['Vol']} %")
 
-                    met_ind = calc_metrics(ind_series.pct_change().dropna())
-
-                    c1,c2,c3,c4 = st.columns(4)
-                    c1.metric("CAGR %", met_ind["CAGR"])
-                    c2.metric("MaxDD %", met_ind["MaxDD"])
-                    c3.metric("Sharpe", met_ind["Sharpe"])
-                    c4.metric("Vol %", met_ind["Vol"])
-
+                    # Equity
                     fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=ind_series.index, y=ind_series, name=s))
+                    fig.add_trace(go.Scatter(x=ser.index, y=ser, name=s))
                     fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(dash="dash")))
-                    fig.update_layout(height=500)
+                    fig.update_layout(height=400)
                     st.plotly_chart(fig, use_container_width=True)
 
-                    last_ind, last_w_ind = sig[-1]
-                    st.write("Última asignación:")
-                    st.json({k:f"{v*100:.2f}%" for k,v in last_w_ind.items()})
+                    # Drawdown
+                    dd_ind = (ser/ser.cummax()-1)*100
+                    fig_dd = go.Figure()
+                    fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s))
+                    fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY"))
+                    fig_dd.update_layout(height=300, yaxis_title="Drawdown %")
+                    st.plotly_chart(fig_dd, use_container_width=True)
+
+                    # Correlaciones
+                    st.subheader("📊 Correlaciones")
+                    st.dataframe(
+                        corr.loc[[s, "SPY"], [c for c in corr.columns if c != s]]
+                        .style.background_gradient(cmap="coolwarm", axis=None)
+                    )
+
+                    # Asignación final
+                    last_date_ind, last_w_ind = ind_series[s].index[-1], combined_weights[-1][1]
+                    st.write("Asignación final:")
+                    st.json({k:f"{v*100:.2f}%" for k,v in last_w_ind.items() if k in ser.index.names})
+
 else:
     st.info("👈 Configura y ejecuta")
