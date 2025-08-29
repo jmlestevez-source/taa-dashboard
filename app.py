@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from datetime import datetime
+from datetime import datetime, timedelta
 import requests
 import time
 import random
@@ -14,7 +14,7 @@ st.title("🎯 Multi-Strategy Tactical Asset Allocation")
 
 # ------------- SIDEBAR -------------
 initial_capital = st.sidebar.number_input("💰 Capital Inicial ($)", 1000, 10_000_000, 100_000, 1000)
-start_date = st.sidebar.date_input("Fecha de inicio", datetime(2015, 1, 1))
+start_date = st.sidebar.date_input("Fecha de inicio", datetime(2010, 1, 1))
 end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today())
 
 DAA_KELLER = {
@@ -98,15 +98,14 @@ def calc_metrics(rets):
 
 # ------------- MOTORES -------------
 def weights_daa(df, risky, protect, canary):
-    if len(df) < 6:  # Necesitamos al menos 6 puntos para calcular momentum
+    if len(df) < 6:
         return [(df.index[-1], {})] if len(df) > 0 else []
     
     sig = []
-    start_idx = max(5, min(5, len(df)-1))  # Asegurar que no excedemos el índice
+    start_idx = min(5, len(df)-1)
     
     for i in range(start_idx, len(df)):
         try:
-            # Calcular momentum para cada categoría
             can = {s: momentum_score(df.iloc[:i+1], s) for s in canary if s in df.columns}
             ris = {s: momentum_score(df.iloc[:i+1], s) for s in risky  if s in df.columns}
             pro = {s: momentum_score(df.iloc[:i+1], s) for s in protect if s in df.columns}
@@ -115,37 +114,33 @@ def weights_daa(df, risky, protect, canary):
             w = {}
             
             if n == 2 and pro:
-                # Regla de protección: todo en protect
                 if pro:
                     top_p = max(pro, key=pro.get)
                     w = {top_p: 1.0}
             elif n == 1 and pro and ris:
-                # Regla mixta: 50% protect, 50% risky
                 top_p = max(pro, key=pro.get) if pro else None
                 top_r = sorted(ris, key=ris.get, reverse=True)[:6] if ris else []
                 if top_p and top_r:
                     w = {top_p: 0.5}
                     w.update({t: 0.5/6 for t in top_r})
             elif ris:
-                # Regla normal: solo risky
                 top_r = sorted(ris, key=ris.get, reverse=True)[:6]
                 if top_r:
                     w = {t: 1/6 for t in top_r}
             
             sig.append((df.index[i], w))
-        except Exception as e:
-            print(f"Error en weights_daa para índice {i}: {e}")
+        except:
             sig.append((df.index[i], {}))
     
     return sig if sig else [(df.index[-1], {})]
 
 def weights_roc4(df, universe, fill):
-    if len(df) < 6:  # Necesitamos al menos 6 puntos
+    if len(df) < 6:
         return [(df.index[-1], {})] if len(df) > 0 else []
     
     sig = []
     base = 1/6
-    start_idx = max(5, min(5, len(df)-1))  # Asegurar que no excedemos el índice
+    start_idx = min(5, len(df)-1)
     
     for i in range(start_idx, len(df)):
         try:
@@ -167,8 +162,7 @@ def weights_roc4(df, universe, fill):
                     weights[best] = weights.get(best, 0) + extra
             
             sig.append((df.index[i], weights))
-        except Exception as e:
-            print(f"Error en weights_roc4 para índice {i}: {e}")
+        except:
             sig.append((df.index[i], {}))
     
     return sig if sig else [(df.index[-1], {})]
@@ -187,7 +181,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                 ALL_STRATEGIES[s].get("fill", [])
                                 for s in active], []) + ["SPY"]))
         
-        raw = download_once(tickers, start_date, end_date)
+        # Extender el rango de fechas para asegurar datos suficientes
+        extended_start = start_date - timedelta(days=365*2)  # 2 años antes
+        extended_end = end_date + timedelta(days=30)  # 1 mes después
+        
+        raw = download_once(tickers, extended_start, extended_end)
         if not raw:
             st.error("❌ No se pudieron descargar datos. Verifica las API keys y conexión.")
             st.stop()
@@ -197,147 +195,147 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.error("❌ No hay datos suficientes para el análisis.")
             st.stop()
 
+        # Filtrar dataframe al rango de fechas seleccionado
+        df_filtered = df[(df.index >= pd.Timestamp(start_date)) & (df.index <= pd.Timestamp(end_date))]
+        if df_filtered.empty:
+            st.error("❌ No hay datos en el rango de fechas seleccionado.")
+            st.stop()
+
         # --- cálculo de pesos por estrategia y combinación ---
         portfolio = [initial_capital]
         dates_for_portfolio = []
         
-        # Asegurar que tenemos suficientes datos
-        if len(df) < 6:
+        if len(df_filtered) < 6:
             st.error("❌ No hay suficientes datos históricos para el análisis.")
             st.stop()
         
-        # Empezar desde el índice 5 (mes 6) para tener suficientes datos
         start_calc_index = 5
-        if start_calc_index >= len(df):
-            start_calc_index = len(df) - 1
+        if start_calc_index >= len(df_filtered):
+            start_calc_index = len(df_filtered) - 1
             
-        dates_for_portfolio.append(df.index[start_calc_index-1])  # Fecha inicial
+        dates_for_portfolio.append(df_filtered.index[start_calc_index-1])
         
-        for i in range(start_calc_index, len(df)):
+        for i in range(start_calc_index, len(df_filtered)):
             w_total = {}
             for s in active:
                 if s == "DAA KELLER":
                     try:
-                        sig_result = weights_daa(df.iloc[:i+1], **ALL_STRATEGIES[s])
+                        sig_result = weights_daa(df_filtered.iloc[:i+1], **ALL_STRATEGIES[s])
                         if sig_result and len(sig_result) > 0:
                             _, w = sig_result[-1]
                         else:
                             w = {}
-                    except Exception as e:
-                        print(f"Error DAA KELLER en índice {i}: {e}")
+                    except:
                         w = {}
                 else:
                     try:
-                        sig_result = weights_roc4(df.iloc[:i+1],
+                        sig_result = weights_roc4(df_filtered.iloc[:i+1],
                                                 ALL_STRATEGIES[s]["universe"],
                                                 ALL_STRATEGIES[s]["fill"])
                         if sig_result and len(sig_result) > 0:
                             _, w = sig_result[-1]
                         else:
                             w = {}
-                    except Exception as e:
-                        print(f"Error ROC4 en índice {i}: {e}")
+                    except:
                         w = {}
                 
-                # Acumular pesos ponderados
                 for t, v in w.items():
                     w_total[t] = w_total.get(t, 0) + v / len(active)
 
             # Calcular retorno de la cartera combinada
             ret = 0
             for t, weight in w_total.items():
-                if t in df.columns and i > 0:
+                if t in df_filtered.columns and i > 0:
                     try:
-                        if df.iloc[i-1][t] != 0 and not pd.isna(df.iloc[i-1][t]) and not pd.isna(df.iloc[i][t]):
-                            asset_ret = (df.iloc[i][t] / df.iloc[i-1][t]) - 1
+                        if df_filtered.iloc[i-1][t] != 0 and not pd.isna(df_filtered.iloc[i-1][t]) and not pd.isna(df_filtered.iloc[i][t]):
+                            asset_ret = (df_filtered.iloc[i][t] / df_filtered.iloc[i-1][t]) - 1
                             ret += weight * asset_ret
-                    except Exception as e:
-                        print(f"Error calculando retorno para {t}: {e}")
+                    except:
                         pass
             
             portfolio.append(portfolio[-1] * (1 + ret))
-            dates_for_portfolio.append(df.index[i])
+            dates_for_portfolio.append(df_filtered.index[i])
 
         # --- series alineadas ---
         comb_series = pd.Series(portfolio, index=dates_for_portfolio)
         
         # Crear SPY series correctamente alineada
-        if "SPY" in df.columns:
-            spy_prices = df["SPY"]
-            # Asegurar que no hay divisiones por cero
-            if spy_prices.iloc[0] > 0:
+        if "SPY" in df_filtered.columns:
+            spy_prices = df_filtered["SPY"]
+            if len(spy_prices) > 0 and spy_prices.iloc[0] > 0:
                 spy_series = (spy_prices / spy_prices.iloc[0] * initial_capital)
-                # Alinear con las mismas fechas que comb_series
                 spy_series = spy_series.reindex(comb_series.index).ffill()
             else:
-                # Fallback si hay problemas con SPY
                 spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
         else:
-            # Fallback si no hay SPY en los datos
             spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
 
         met_comb = calc_metrics(comb_series.pct_change().dropna())
         met_spy = calc_metrics(spy_series.pct_change().dropna())
 
         # --- calcular señales individuales y combinadas ---
-        signals_dict_last = {}  # Señales a cierre del mes anterior (real)
-        signals_dict_current = {}  # Señales actuales (hipotéticas)
-        combined_signal_last = {}  # Señal combinada real
-        combined_signal_current = {}  # Señal combinada hipotética
+        # Señales reales (hasta el último mes completo)
+        signals_dict_last = {}
+        combined_signal_last = {}
         
-        # Calcular señales individuales
+        # Señales hipotéticas (hasta hoy, incluyendo datos más recientes)
+        signals_dict_current = {}
+        combined_signal_current = {}
+        
+        # Calcular señales individuales - ÚLTIMA (REAL)
         for s in active:
             if s == "DAA KELLER":
                 try:
-                    # Señal del último mes (real)
-                    sig_last = weights_daa(df, **ALL_STRATEGIES[s])
+                    sig_last = weights_daa(df_filtered, **ALL_STRATEGIES[s])
                     if sig_last and len(sig_last) > 0:
                         signals_dict_last[s] = sig_last[-1][1]
                     else:
                         signals_dict_last[s] = {}
-                    # Señal actual (hipotética)
-                    sig_current = weights_daa(df, **ALL_STRATEGIES[s])
-                    if sig_current and len(sig_current) > 0:
-                        signals_dict_current[s] = sig_current[-1][1]
-                    else:
-                        signals_dict_current[s] = {}
-                except Exception as e:
-                    print(f"Error calculando señales DAA KELLER: {e}")
+                except:
                     signals_dict_last[s] = {}
-                    signals_dict_current[s] = {}
             else:
                 try:
-                    # Señal del último mes (real)
-                    sig_last = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
+                    sig_last = weights_roc4(df_filtered, ALL_STRATEGIES[s]["universe"],
                                           ALL_STRATEGIES[s]["fill"])
                     if sig_last and len(sig_last) > 0:
                         signals_dict_last[s] = sig_last[-1][1]
                     else:
                         signals_dict_last[s] = {}
-                    # Señal actual (hipotética)
+                except:
+                    signals_dict_last[s] = {}
+        
+        # Calcular señales individuales - ACTUAL (HIPOTÉTICA) usando todo el df
+        for s in active:
+            if s == "DAA KELLER":
+                try:
+                    sig_current = weights_daa(df, **ALL_STRATEGIES[s])
+                    if sig_current and len(sig_current) > 0:
+                        signals_dict_current[s] = sig_current[-1][1]
+                    else:
+                        signals_dict_current[s] = {}
+                except:
+                    signals_dict_current[s] = {}
+            else:
+                try:
                     sig_current = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
                                              ALL_STRATEGIES[s]["fill"])
                     if sig_current and len(sig_current) > 0:
                         signals_dict_current[s] = sig_current[-1][1]
                     else:
                         signals_dict_current[s] = {}
-                except Exception as e:
-                    print(f"Error calculando señales ROC4: {e}")
-                    signals_dict_last[s] = {}
+                except:
                     signals_dict_current[s] = {}
         
         # Calcular señales combinadas
-        combined_signal_last = {}
-        combined_signal_current = {}
-        
+        # Señal combinada última (real)
         for s in active:
-            # Señal combinada última (real)
             if s in signals_dict_last:
                 signal = signals_dict_last[s]
                 for ticker, weight in signal.items():
                     combined_signal_last[ticker] = combined_signal_last.get(ticker, 0) + weight / len(active)
-            
-            # Señal combinada actual (hipotética)
+        
+        # Señal combinada actual (hipotética)
+        for s in active:
             if s in signals_dict_current:
                 signal = signals_dict_current[s]
                 for ticker, weight in signal.items():
@@ -349,21 +347,21 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         for s in active:
             if s == "DAA KELLER":
                 try:
-                    sig = weights_daa(df, **ALL_STRATEGIES[s])
+                    sig = weights_daa(df_filtered, **ALL_STRATEGIES[s])
                 except:
                     sig = []
             else:
                 try:
-                    sig = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
+                    sig = weights_roc4(df_filtered, ALL_STRATEGIES[s]["universe"],
                                      ALL_STRATEGIES[s]["fill"])
                 except:
                     sig = []
             
             eq = [initial_capital]
-            individual_dates = [df.index[start_calc_index-1]] if start_calc_index > 0 else [df.index[0]]
+            individual_dates = [df_filtered.index[start_calc_index-1]] if start_calc_index > 0 else [df_filtered.index[0]]
             
-            for i in range(start_calc_index, len(df)):
-                dt = df.index[i]
+            for i in range(start_calc_index, len(df_filtered)):
+                dt = df_filtered.index[i]
                 ret = 0
                 try:
                     if i - start_calc_index < len(sig) and len(sig) > 0:
@@ -371,15 +369,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         if idx_sig < len(sig):
                             w = sig[idx_sig][1]
                             for t, weight in w.items():
-                                if t in df.columns and i > 0:
+                                if t in df_filtered.columns and i > 0:
                                     try:
-                                        if df.iloc[i-1][t] != 0 and not pd.isna(df.iloc[i-1][t]) and not pd.isna(df.iloc[i][t]):
-                                            asset_ret = (df.iloc[i][t] / df.iloc[i-1][t]) - 1
+                                        if df_filtered.iloc[i-1][t] != 0 and not pd.isna(df_filtered.iloc[i-1][t]) and not pd.isna(df_filtered.iloc[i][t]):
+                                            asset_ret = (df_filtered.iloc[i][t] / df_filtered.iloc[i-1][t]) - 1
                                             ret += weight * asset_ret
                                     except:
                                         pass
-                except Exception as e:
-                    print(f"Error en cálculo individual para {s} índice {i}: {e}")
+                except:
                     pass
                 
                 eq.append(eq[-1] * (1 + ret))
@@ -438,7 +435,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             # Mostrar señales individuales - TABLA COMPARATIVA
             st.subheader("🎯 Señales Individuales Comparativas")
             
-            # Crear tabla comparativa de señales individuales
             signals_data = []
             for strategy in active:
                 last_signal = signals_dict_last.get(strategy, {})
@@ -464,4 +460,103 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
             st.plotly_chart(fig, use_container_width=True)
 
-           
+            # Drawdown con relleno y colores distintos
+            dd_comb = (comb_series/comb_series.cummax()-1)*100
+            dd_spy = (spy_series/spy_series.cummax()-1)*100
+            fig_dd = go.Figure()
+            fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada", 
+                                      line=dict(color='red', width=2),
+                                      fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
+            fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY", 
+                                      line=dict(color='orange', width=2, dash="dot"),
+                                      fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
+            fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
+            st.plotly_chart(fig_dd, use_container_width=True)
+
+            # Correlaciones (solo en la pestaña combinada)
+            st.subheader("📊 Correlaciones entre Estrategias")
+            if not corr.empty and "SPY" in corr.index:
+                try:
+                    relevant_cols = [col for col in corr.columns if col in active or col == "SPY"]
+                    if len(relevant_cols) > 1:
+                        corr_display = corr.loc[relevant_cols, relevant_cols]
+                        if not corr_display.empty:
+                            st.dataframe(corr_display.style.background_gradient(cmap="coolwarm", axis=None))
+                        else:
+                            st.write("No hay suficientes datos para correlaciones")
+                    else:
+                        st.write("No hay suficientes datos para correlaciones")
+                except:
+                    try:
+                        relevant_cols = [col for col in corr.columns if col in active or col == "SPY"]
+                        if len(relevant_cols) > 1:
+                            corr_display = corr.loc[relevant_cols, relevant_cols]
+                            if not corr_display.empty:
+                                st.dataframe(corr_display)
+                            else:
+                                st.write("No hay suficientes datos para correlaciones")
+                        else:
+                            st.write("No hay suficientes datos para correlaciones")
+                    except:
+                        st.write("No se pueden calcular correlaciones")
+            else:
+                st.write("No hay datos suficientes para calcular correlaciones")
+
+        # ---- TABS INDIVIDUALES ----
+        for idx, s in enumerate(active, start=1):
+            with tabs[idx]:
+                st.header(s)
+                if s in ind_series:
+                    ser = ind_series[s]
+                    met = calc_metrics(ser.pct_change().dropna())
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.metric("CAGR", f"{met['CAGR']} %")
+                        st.metric("MaxDD", f"{met['MaxDD']} %")
+                    with col2:
+                        st.metric("Sharpe", met["Sharpe"])
+                        st.metric("Vol", f"{met['Vol']} %")
+
+                    # Mostrar señales individuales
+                    st.subheader("🎯 Señales")
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write("**Última (Real):**")
+                        if s in signals_dict_last and signals_dict_last[s]:
+                            last_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in signals_dict_last[s].items()}
+                            st.write(last_pct)
+                        else:
+                            st.write("-")
+                    with col2:
+                        st.write("**Actual (Hipotética):**")
+                        if s in signals_dict_current and signals_dict_current[s]:
+                            current_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in signals_dict_current[s].items()}
+                            st.write(current_pct)
+                        else:
+                            st.write("-")
+
+                    # Equity con colores distintos
+                    fig = go.Figure()
+                    fig.add_trace(go.Scatter(x=ser.index, y=ser, name=s, line=dict(color='green', width=3)))
+                    fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
+                    fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Drawdown con relleno y colores distintos
+                    dd_ind = (ser/ser.cummax()-1)*100
+                    fig_dd = go.Figure()
+                    fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s, 
+                                              line=dict(color='red', width=2),
+                                              fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
+                    fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY", 
+                                              line=dict(color='orange', width=2, dash="dot"),
+                                              fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
+                    fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
+                    st.plotly_chart(fig_dd, use_container_width=True)
+
+                else:
+                    st.write("No hay datos disponibles para esta estrategia")
+
+else:
+    st.info("👈 Configura y ejecuta")
