@@ -7,3 +7,4 @@ requests-cache==1.2.1
 pytz==2024.1
 pyarrow
 matplotlib
+curl_cffi
