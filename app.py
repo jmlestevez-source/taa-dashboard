@@ -10,6 +10,7 @@ from collections import defaultdict
 import os
 import pickle
 import hashlib
+from curl_cffi import requests as curl_requests
 
 # ------------- CONFIG -------------
 st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
@@ -65,51 +66,46 @@ def save_to_cache(ticker, start, end, data):
     except Exception as e:
         st.warning(f"⚠️ Error guardando {ticker} en caché: {e}")
 
-# ------------- DESCARGA (yfinance con manejo de rate limit) -------------
+# ------------- DESCARGA (yfinance con curl_cffi) -------------
 def download_ticker_data(ticker, start, end):
-    """Descarga datos de un ticker usando yfinance con manejo de rate limit"""
+    """Descarga datos de un ticker usando yfinance con curl_cffi para evitar rate limits"""
     # Intentar cargar desde caché primero
     cached_data = load_from_cache(ticker, start, end)
     if cached_data is not None:
         return cached_data
     
-    max_retries = 5
-    for attempt in range(max_retries):
-        try:
-            st.write(f"📥 Descargando {ticker} desde Yahoo Finance (intento {attempt + 1})...")
-            stock = yf.Ticker(ticker)
-            
-            # Convertir fechas a formato adecuado
-            start_str = start.strftime('%Y-%m-%d')
-            end_str = end.strftime('%Y-%m-%d')
-            
-            # Descargar datos diarios y luego convertir a mensuales
-            history = stock.history(start=start_str, end=end_str, interval="1d")
-            
-            if not history.empty and len(history) > 0:
-                # Convertir a datos mensuales tomando el último día de cada mes
-                history_monthly = history.resample('ME').last()  # ME = Month End
-                if not history_monthly.empty:
-                    df_monthly = history_monthly[['Close']].rename(columns={'Close': ticker})
-                    df_monthly[ticker] = pd.to_numeric(df_monthly[ticker], errors='coerce')
-                    st.write(f"✅ {ticker} descargado - {len(df_monthly)} registros")
-                    save_to_cache(ticker, start, end, df_monthly)
-                    return df_monthly
-                else:
-                    st.warning(f"⚠️ Datos mensuales vacíos para {ticker}")
+    try:
+        st.write(f"📥 Descargando {ticker} desde Yahoo Finance...")
+        
+        # Crear sesión con curl_cffi para evitar rate limits
+        session = curl_requests.Session(impersonate="chrome")
+        
+        # Crear ticker con la sesión personalizada
+        stock = yf.Ticker(ticker, session=session)
+        
+        # Convertir fechas a formato adecuado
+        start_str = start.strftime('%Y-%m-%d')
+        end_str = end.strftime('%Y-%m-%d')
+        
+        # Descargar datos diarios y luego convertir a mensuales
+        history = stock.history(start=start_str, end=end_str, interval="1d")
+        
+        if not history.empty and len(history) > 0:
+            # Convertir a datos mensuales tomando el último día de cada mes
+            history_monthly = history.resample('ME').last()  # ME = Month End
+            if not history_monthly.empty:
+                df_monthly = history_monthly[['Close']].rename(columns={'Close': ticker})
+                df_monthly[ticker] = pd.to_numeric(df_monthly[ticker], errors='coerce')
+                st.write(f"✅ {ticker} descargado - {len(df_monthly)} registros")
+                save_to_cache(ticker, start, end, df_monthly)
+                return df_monthly
             else:
-                st.warning(f"⚠️ No se encontraron datos para {ticker}")
-                
-        except Exception as e:
-            error_msg = str(e).lower()
-            if "too many requests" in error_msg or "rate limit" in error_msg:
-                wait_time = (2 ** attempt) * random.uniform(1, 3)  # Backoff exponencial con aleatoriedad
-                st.warning(f"⚠️ Rate limit para {ticker}. Esperando {wait_time:.1f} segundos...")
-                time.sleep(wait_time)
-                continue
-            else:
-                st.error(f"❌ Error descargando {ticker}: {str(e)[:100]}...")
-                break
+                st.warning(f"⚠️ Datos mensuales vacíos para {ticker}")
+        else:
+            st.warning(f"⚠️ No se encontraron datos para {ticker}")
+            
+    except Exception as e:
+        st.error(f"❌ Error descargando {ticker}: {str(e)[:100]}...")
     
     return pd.DataFrame()
 
@@ -130,9 +126,9 @@ def download_all_data(tickers, start, end):
         except Exception as e:
             st.error(f"❌ Error procesando {tk}: {e}")
         
-        # Pausa entre descargas para evitar rate limit
+        # Pequeña pausa entre descargas
         if idx < len(tickers) - 1:  # No hacer pausa en el último ticker
-            time.sleep(random.uniform(0.5, 1.5))  # Pausa aleatoria entre 0.5 y 1.5 segundos
+            time.sleep(random.uniform(0.1, 0.5))  # Pausa más corta ahora
     
     bar.empty()
     return data
