@@ -74,14 +74,20 @@ def download_ticker_data(ticker, start, end):
     
     try:
         st.write(f"📥 Descargando {ticker} desde Yahoo Finance...")
-        yf_ticker = yf.Ticker(ticker)
-        df = yf_ticker.history(start=start, end=end, interval="1d")
+        stock = yf.Ticker(ticker)
         
-        if not df.empty and len(df) > 0:
-            # Convertir a datos mensuales
-            df_monthly = df.resample('ME').last()  # 'ME' para fin de mes
-            if not df_monthly.empty:
-                df_monthly = df_monthly[['Close']].rename(columns={'Close': ticker})
+        # Convertir fechas a formato adecuado
+        start_str = start.strftime('%Y-%m-%d')
+        end_str = end.strftime('%Y-%m-%d')
+        
+        # Descargar datos diarios y luego convertir a mensuales
+        history = stock.history(start=start_str, end=end_str, interval="1d")
+        
+        if not history.empty and len(history) > 0:
+            # Convertir a datos mensuales tomando el último día de cada mes
+            history_monthly = history.resample('ME').last()  # ME = Month End
+            if not history_monthly.empty:
+                df_monthly = history_monthly[['Close']].rename(columns={'Close': ticker})
                 df_monthly[ticker] = pd.to_numeric(df_monthly[ticker], errors='coerce')
                 st.write(f"✅ {ticker} descargado - {len(df_monthly)} registros")
                 save_to_cache(ticker, start, end, df_monthly)
@@ -268,7 +274,7 @@ def format_signal_for_display(signal_dict):
                 "Ticker": ticker,
                 "Peso (%)": f"{weight * 100:.2f}"
             })
-    if not formatted_data:
+    if not formatted_
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
@@ -459,179 +465,4 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             
             # Calcular métricas
             met_comb = calc_metrics(comb_series.pct_change().dropna())
-            met_spy = calc_metrics(spy_series.pct_change().dropna())
-            
-            st.success("✅ Cálculos completados")
-            
-        except Exception as e:
-            st.error(f"❌ Error en cálculos principales: {e}")
-            st.stop()
-
-        # --- cálculo de series individuales ---
-        ind_series = {}
-        ind_metrics = {}
-        
-        for s in active:
-            try:
-                if s == "DAA KELLER":
-                    sig = weights_daa(df_filtered, **ALL_STRATEGIES[s])
-                else:
-                    sig = weights_roc4(df_filtered, 
-                                     ALL_STRATEGIES[s]["universe"],
-                                     ALL_STRATEGIES[s]["fill"])
-                
-                eq = [initial_capital]
-                individual_dates = [df_filtered.index[start_calc_index-1]] if start_calc_index > 0 and start_calc_index-1 < len(df_filtered) else [df_filtered.index[0]]
-                
-                for i in range(start_calc_index, len(df_filtered)):
-                    ret = 0
-                    try:
-                        if i - start_calc_index < len(sig) and len(sig) > 0:
-                            idx_sig = i - start_calc_index
-                            if idx_sig < len(sig):
-                                w = sig[idx_sig][1]
-                                for t, weight in w.items():
-                                    if t in df_filtered.columns and i > 0:
-                                        try:
-                                            if df_filtered.iloc[i-1][t] != 0 and not pd.isna(df_filtered.iloc[i-1][t]) and not pd.isna(df_filtered.iloc[i][t]):
-                                                asset_ret = (df_filtered.iloc[i][t] / df_filtered.iloc[i-1][t]) - 1
-                                                ret += weight * asset_ret
-                                        except:
-                                            pass
-                    except:
-                        pass
-                    
-                    eq.append(eq[-1] * (1 + ret))
-                    if i < len(df_filtered):
-                        individual_dates.append(df_filtered.index[i])
-                
-                ser = pd.Series(eq, index=individual_dates)
-                ser = ser.reindex(comb_series.index).ffill()
-                ind_series[s] = ser
-                ind_metrics[s] = calc_metrics(ser.pct_change().dropna())
-                
-            except Exception as e:
-                st.error(f"Error calculando serie para {s}: {e}")
-                ind_series[s] = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
-                ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
-
-        # ---------- MOSTRAR RESULTADOS ----------
-        try:
-            # Pestañas
-            tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
-            tabs = st.tabs(tab_names)
-            
-            # ---- TAB 0: COMBINADA ----
-            with tabs[0]:
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("CAGR (Combinada)", f"{met_comb['CAGR']} %")
-                    st.metric("CAGR (SPY)", f"{met_spy['CAGR']} %")
-                with col2:
-                    st.metric("MaxDD (Combinada)", f"{met_comb['MaxDD']} %")
-                    st.metric("MaxDD (SPY)", f"{met_spy['MaxDD']} %")
-                st.metric("Sharpe (Combinada)", met_comb["Sharpe"])
-                st.metric("Sharpe (SPY)", met_spy["Sharpe"])
-                
-                # Mostrar señales COMBINADAS
-                st.subheader("🎯 Señal Cartera Combinada")
-                # Combinar señales individuales para mostrar la combinada
-                combined_last = {}
-                combined_current = {}
-                for s in active:
-                    last_sig = signals_dict_last.get(s, {})
-                    current_sig = signals_dict_current.get(s, {})
-                    for t, w in last_sig.items():
-                        combined_last[t] = combined_last.get(t, 0) + w / len(active)
-                    for t, w in current_sig.items():
-                        combined_current[t] = combined_current.get(t, 0) + w / len(active)
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("**Última (Real):**")
-                    st.dataframe(format_signal_for_display(combined_last), use_container_width=True, hide_index=True)
-                with col2:
-                    st.write("**Actual (Hipotética):**")
-                    st.dataframe(format_signal_for_display(combined_current), use_container_width=True, hide_index=True)
-
-                # Gráficos
-                st.subheader("📈 Equity Curve")
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=comb_series.index, y=comb_series, name="Combinada", line=dict(color='blue', width=3)))
-                fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
-                fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Drawdown
-                st.subheader("📉 Drawdown")
-                dd_comb = (comb_series/comb_series.cummax()-1)*100
-                dd_spy = (spy_series/spy_series.cummax()-1)*100
-                fig_dd = go.Figure()
-                fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada", 
-                                          line=dict(color='red', width=2),
-                                          fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
-                fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY", 
-                                          line=dict(color='orange', width=2, dash="dot"),
-                                          fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
-                fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
-                st.plotly_chart(fig_dd, use_container_width=True)
-                
-        except Exception as e:
-            st.error(f"❌ Error mostrando resultados combinados: {e}")
-
-        # ---- TABS INDIVIDUALES ----
-        for idx, s in enumerate(active, start=1):
-            try:
-                with tabs[idx]:
-                    st.header(s)
-                    
-                    if s in ind_series and s in ind_metrics:
-                        ser = ind_series[s]
-                        met = ind_metrics[s]
-
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.metric("CAGR", f"{met['CAGR']} %")
-                            st.metric("MaxDD", f"{met['MaxDD']} %")
-                        with col2:
-                            st.metric("Sharpe", met["Sharpe"])
-                            st.metric("Vol", f"{met['Vol']} %")
-
-                        # Mostrar señales individuales
-                        st.subheader("🎯 Señales")
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.write("**Última (Real):**")
-                            st.dataframe(format_signal_for_display(signals_dict_last.get(s, {})), use_container_width=True, hide_index=True)
-                        with col2:
-                            st.write("**Actual (Hipotética):**")
-                            st.dataframe(format_signal_for_display(signals_dict_current.get(s, {})), use_container_width=True, hide_index=True)
-
-                        # Gráficos individuales
-                        st.subheader("📈 Equity Curve")
-                        fig = go.Figure()
-                        fig.add_trace(go.Scatter(x=ser.index, y=ser, name=s, line=dict(color='green', width=3)))
-                        fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
-                        fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
-                        st.plotly_chart(fig, use_container_width=True)
-
-                        # Drawdown individuales
-                        st.subheader("📉 Drawdown")
-                        dd_ind = (ser/ser.cummax()-1)*100
-                        fig_dd = go.Figure()
-                        fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s, 
-                                                  line=dict(color='red', width=2),
-                                                  fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
-                        fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY", 
-                                                  line=dict(color='orange', width=2, dash="dot"),
-                                                  fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
-                        fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
-                        st.plotly_chart(fig_dd, use_container_width=True)
-                    else:
-                        st.write("No hay datos disponibles para esta estrategia.")
-                        
-            except Exception as e:
-                st.error(f"❌ Error en pestaña {s}: {e}")
-            
-else:
-    st.info("👈 Configura y ejecuta")
+            met_spy = c
