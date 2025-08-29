@@ -228,48 +228,55 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         met_comb = calc_metrics(comb_series.pct_change().dropna())
         met_spy = calc_metrics(spy_series.pct_change().dropna())
 
-        # --- series individuales y correlaciones ---
-        ind_series = {}
+        # --- calcular señales actuales (hipotéticas) ---
         signals_dict_last = {}  # Señales a cierre del mes anterior
         signals_dict_current = {}  # Señales actuales
         
         for s in active:
             if s == "DAA KELLER":
                 try:
-                    sig = weights_daa(df, **ALL_STRATEGIES[s])
                     # Señal del último mes (real)
-                    if sig:
-                        signals_dict_last[s] = sig[-1][1]
-                    # Señal actual (hipotética)
-                    try:
-                        current_sig = weights_daa(df, **ALL_STRATEGIES[s])
-                        if current_sig:
-                            signals_dict_current[s] = current_sig[-1][1]
-                    except:
-                        signals_dict_current[s] = {}
+                    sig_last = weights_daa(df, **ALL_STRATEGIES[s])
+                    if sig_last:
+                        signals_dict_last[s] = sig_last[-1][1]
+                    # Señal actual (hipotética) - usando todo el dataframe
+                    sig_current = weights_daa(df, **ALL_STRATEGIES[s])
+                    if sig_current:
+                        signals_dict_current[s] = sig_current[-1][1]
                 except:
-                    sig = []
                     signals_dict_last[s] = {}
                     signals_dict_current[s] = {}
             else:
                 try:
-                    sig = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
-                                     ALL_STRATEGIES[s]["fill"])
                     # Señal del último mes (real)
-                    if sig:
-                        signals_dict_last[s] = sig[-1][1]
-                    # Señal actual (hipotética)
-                    try:
-                        current_sig = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
-                                                 ALL_STRATEGIES[s]["fill"])
-                        if current_sig:
-                            signals_dict_current[s] = current_sig[-1][1]
-                    except:
-                        signals_dict_current[s] = {}
+                    sig_last = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
+                                          ALL_STRATEGIES[s]["fill"])
+                    if sig_last:
+                        signals_dict_last[s] = sig_last[-1][1]
+                    # Señal actual (hipotética) - usando todo el dataframe
+                    sig_current = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
+                                             ALL_STRATEGIES[s]["fill"])
+                    if sig_current:
+                        signals_dict_current[s] = sig_current[-1][1]
                 except:
-                    sig = []
                     signals_dict_last[s] = {}
                     signals_dict_current[s] = {}
+
+        # --- series individuales ---
+        ind_series = {}
+        
+        for s in active:
+            if s == "DAA KELLER":
+                try:
+                    sig = weights_daa(df, **ALL_STRATEGIES[s])
+                except:
+                    sig = []
+            else:
+                try:
+                    sig = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
+                                     ALL_STRATEGIES[s]["fill"])
+                except:
+                    sig = []
             
             eq = [initial_capital]
             individual_dates = [df.index[4]]  # Fecha inicial
@@ -326,8 +333,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.metric("Sharpe (Combinada)", met_comb["Sharpe"])
             st.metric("Sharpe (SPY)", met_spy["Sharpe"])
 
-            # Mostrar señales actuales en modo porcentaje
-            st.subheader("🎯 Señales")
+            # Mostrar señales actuales en modo porcentaje - TABLA COMPARATIVA
+            st.subheader("🎯 Señales Comparativas")
             
             # Crear tabla comparativa de señales
             signals_data = []
@@ -335,13 +342,13 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 last_signal = signals_dict_last.get(strategy, {})
                 current_signal = signals_dict_current.get(strategy, {})
                 
-                last_pct = {k: f"{v*100:.1f}%" for k, v in last_signal.items()}
-                current_pct = {k: f"{v*100:.1f}%" for k, v in current_signal.items()}
+                last_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in last_signal.items()}
+                current_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in current_signal.items()}
                 
                 signals_data.append({
                     "Estrategia": strategy,
-                    "Última (Real)": str(last_pct),
-                    "Actual (Hipotética)": str(current_pct)
+                    "Última (Real)": str(last_pct) if last_pct else "-",
+                    "Actual (Hipotética)": str(current_pct) if current_pct else "-"
                 })
             
             if signals_data:
@@ -374,7 +381,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 try:
                     # Filtrar solo las columnas de estrategias activas + SPY
                     relevant_cols = [col for col in corr.columns if col in active or col == "SPY"]
-                    if relevant_cols:
+                    if len(relevant_cols) > 1:
                         corr_display = corr.loc[relevant_cols, relevant_cols]
                         st.dataframe(corr_display.style.background_gradient(cmap="coolwarm", axis=None))
                     else:
@@ -382,7 +389,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 except Exception as e:
                     try:
                         relevant_cols = [col for col in corr.columns if col in active or col == "SPY"]
-                        if relevant_cols:
+                        if len(relevant_cols) > 1:
                             corr_display = corr.loc[relevant_cols, relevant_cols]
                             st.dataframe(corr_display)
                         else:
@@ -413,14 +420,18 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     col1, col2 = st.columns(2)
                     with col1:
                         st.write("**Última (Real):**")
-                        if s in signals_dict_last:
-                            last_pct = {k: f"{v*100:.1f}%" for k, v in signals_dict_last[s].items()}
+                        if s in signals_dict_last and signals_dict_last[s]:
+                            last_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in signals_dict_last[s].items()}
                             st.write(last_pct)
+                        else:
+                            st.write("-")
                     with col2:
                         st.write("**Actual (Hipotética):**")
-                        if s in signals_dict_current:
-                            current_pct = {k: f"{v*100:.1f}%" for k, v in signals_dict_current[s].items()}
+                        if s in signals_dict_current and signals_dict_current[s]:
+                            current_pct = {k: f"{v*100:.1f}%" if v > 0 else "-" for k, v in signals_dict_current[s].items()}
                             st.write(current_pct)
+                        else:
+                            st.write("-")
 
                     # Equity con colores distintos
                     fig = go.Figure()
