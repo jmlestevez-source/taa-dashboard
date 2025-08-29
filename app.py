@@ -83,7 +83,7 @@ def get_available_fmp_key():
     st.warning("⚠️ Todas las API keys de FMP han alcanzado el límite diario.")
     return min(FMP_KEYS, key=lambda k: FMP_CALLS[k])
 
-# ------------- DESCARGA (CSV desde GitHub + FMP) -------------
+# ------------- DESCARGA (Solo CSV desde GitHub + FMP) -------------
 def load_historical_data_from_csv(ticker):
     """Carga datos históricos desde CSV en GitHub"""
     try:
@@ -107,14 +107,14 @@ def load_historical_data_from_csv(ticker):
         st.error(f"❌ Error cargando {ticker} desde CSV: {e}")
         return pd.DataFrame()
 
-def get_fmp_data(ticker, days=30):
+def get_fmp_data(ticker, days=35):
     """Obtiene datos recientes de FMP"""
     try:
         api_key = get_available_fmp_key()
         url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?timeseries={days}&apikey={api_key}"
         
         # Añadir delay para respetar límites
-        time.sleep(3)
+        time.sleep(2)
         
         response = requests.get(url, timeout=30)
         FMP_CALLS[api_key] += 1
@@ -150,8 +150,8 @@ def download_ticker_data(ticker, start, end):
         if hist_df.empty:
             return pd.DataFrame()
         
-        # 2. Obtener datos recientes de FMP (últimos 30 días)
-        recent_df = get_fmp_data(ticker, days=30)
+        # 2. Obtener datos recientes de FMP (últimos 35 días)
+        recent_df = get_fmp_data(ticker, days=35)
         
         # 3. Combinar datos
         if not recent_df.empty:
