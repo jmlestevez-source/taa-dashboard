@@ -10,6 +10,7 @@ from collections import defaultdict
 import os
 import pickle
 import hashlib
+from io import StringIO
 
 # ------------- CONFIG -------------
 st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
@@ -92,19 +93,33 @@ def load_historical_data_from_csv(ticker):
         csv_url = f"{base_url}{ticker}.csv"
         
         st.write(f"📥 Cargando datos históricos de {ticker} desde CSV...")
-        df = pd.read_csv(csv_url, skiprows=3)  # Saltar las primeras 3 filas
         
-        # Procesar el DataFrame
-        df['Date'] = pd.to_datetime(df['Date'])
-        df = df.set_index('Date')
-        df = df[['Close']].rename(columns={'Close': ticker})
-        df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
+        # Hacer la solicitud con timeout y headers
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
         
-        st.write(f"✅ {ticker} cargado desde CSV - {len(df)} registros")
-        return df
+        response = requests.get(csv_url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            # Leer el CSV desde el contenido de la respuesta
+            csv_content = response.content.decode('utf-8')
+            df = pd.read_csv(StringIO(csv_content), skiprows=3)
+            
+            # Procesar el DataFrame
+            df['Date'] = pd.to_datetime(df['Date'])
+            df = df.set_index('Date')
+            df = df[['Close']].rename(columns={'Close': ticker})
+            df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
+            
+            st.write(f"✅ {ticker} cargado desde CSV - {len(df)} registros")
+            return df
+        else:
+            st.error(f"❌ Error HTTP {response.status_code} cargando {ticker} desde CSV")
+            return pd.DataFrame()
         
     except Exception as e:
-        st.error(f"❌ Error cargando {ticker} desde CSV: {e}")
+        st.error(f"❌ Error cargando {ticker} desde CSV: {str(e)}")
         return pd.DataFrame()
 
 def get_fmp_data(ticker, days=35):
