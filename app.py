@@ -104,16 +104,25 @@ def load_historical_data_from_csv(ticker):
         if response.status_code == 200:
             # Leer el CSV desde el contenido de la respuesta
             csv_content = response.content.decode('utf-8')
+            
+            # Leer el CSV saltando las 3 primeras filas de encabezados
             df = pd.read_csv(StringIO(csv_content), skiprows=3)
             
-            # Procesar el DataFrame
-            df['Date'] = pd.to_datetime(df['Date'])
-            df = df.set_index('Date')
-            df = df[['Close']].rename(columns={'Close': ticker})
-            df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
-            
-            st.write(f"✅ {ticker} cargado desde CSV - {len(df)} registros")
-            return df
+            # Las columnas son: Date, Price, Close, High, Low, Open, Volume
+            # Usamos la columna 'Close' como precio de cierre
+            if len(df.columns) >= 2 and 'Date' in df.columns and 'Close' in df.columns:
+                # Procesar el DataFrame
+                df['Date'] = pd.to_datetime(df['Date'])
+                df = df.set_index('Date')
+                df = df[['Close']].rename(columns={'Close': ticker})
+                df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
+                
+                st.write(f"✅ {ticker} cargado desde CSV - {len(df)} registros")
+                return df
+            else:
+                st.error(f"❌ Formato incorrecto en {ticker}.csv. Columnas: {list(df.columns)}")
+                return pd.DataFrame()
+                
         else:
             st.error(f"❌ Error HTTP {response.status_code} cargando {ticker} desde CSV")
             return pd.DataFrame()
@@ -121,7 +130,6 @@ def load_historical_data_from_csv(ticker):
     except Exception as e:
         st.error(f"❌ Error cargando {ticker} desde CSV: {str(e)}")
         return pd.DataFrame()
-
 def get_fmp_data(ticker, days=35):
     """Obtiene datos recientes de FMP"""
     try:
