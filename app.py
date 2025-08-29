@@ -32,6 +32,7 @@ FMP_KEYS = ["6cb32e81af450a825085ffeef279c5c2"]
 def fmp_key(): return random.choice(FMP_KEYS)
 
 # ------------- DESCARGA -------------
+@st.cache_data(show_spinner=False)
 def fmp_monthly(ticker, start, end):
     url = (f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}"
            f"?from={start.strftime('%Y-%m-%d')}&to={end.strftime('%Y-%m-%d')}&apikey={fmp_key()}")
@@ -61,20 +62,20 @@ def clean_and_align(data_dict):
 # ------------- UTILS -------------
 def momentum_score(df, col):
     if len(df) < 5: return 0
-    return (df[col].iloc[-1]/df[col].iloc[-5]) - 1
+    return (df[col].iloc[-1] / df[col].iloc[-5]) - 1
 
 def calc_metrics(rets):
     rets = rets.dropna()
-    if len(rets)==0:
-        return {"CAGR":0,"MaxDD":0,"Sharpe":0,"Vol":0}
-    eq = (1+rets).cumprod()
-    yrs = len(rets)/12
-    cagr = eq.iloc[-1]**(1/yrs)-1
-    dd = (eq/eq.cummax()-1).min()
-    sharpe = (rets.mean()/rets.std())*np.sqrt(12) if rets.std()!=0 else 0
-    vol = rets.std()*np.sqrt(12)
-    return {"CAGR":round(cagr*100,2),"MaxDD":round(dd*100,2),
-            "Sharpe":round(sharpe,2),"Vol":round(vol*100,2)}
+    if len(rets) == 0:
+        return {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
+    eq = (1 + rets).cumprod()
+    yrs = len(rets) / 12
+    cagr = eq.iloc[-1] ** (1 / yrs) - 1
+    dd = (eq / eq.cummax() - 1).min()
+    sharpe = (rets.mean() / rets.std()) * np.sqrt(12) if rets.std() != 0 else 0
+    vol = rets.std() * np.sqrt(12)
+    return {"CAGR": round(cagr * 100, 2), "MaxDD": round(dd * 100, 2),
+            "Sharpe": round(sharpe, 2), "Vol": round(vol * 100, 2)}
 
 # ------------- MOTORES -------------
 def weights_daa(df, risky, protect, canary):
@@ -113,9 +114,9 @@ def weights_roc4(df, universe, fill):
             weights[s] = base
         if n_sel < 6 and fill_roc:
             best = max(fill_roc, key=fill_roc.get)
-            extra = (6-n_sel)*base
-            weights[best] = weights.get(best,0)+extra
-        sig.append((df.index[i], weights))
+            extra = (6 - n_sel) * base
+            weights[best] = weights.get(best, 0) + extra
+        sig.append((df.index[i], w))
     return sig if sig else [(df.index[-1], {})]
 
 # ------------- MAIN -------------
@@ -123,6 +124,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
     if not active:
         st.warning("Selecciona al menos una estrategia")
         st.stop()
+
     with st.spinner("Procesando…"):
         tickers = list(set(sum([ALL_STRATEGIES[s].get("risky", []) +
                                 ALL_STRATEGIES[s].get("protect", []) +
@@ -138,7 +140,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         # --- cálculo de pesos por estrategia y combinación ---
         portfolio = [initial_capital]
         combined_weights = []
-        for i in range(5, len(df)):
+        dates = df.index[5:]
+        for dt, i in zip(dates, range(5, len(df))):
             w_total = {}
             for s in active:
                 if s == "DAA KELLER":
@@ -152,20 +155,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
 
             ret = sum(w_total.get(t,0)*(df.iloc[i][t]/df.iloc[i-1][t]-1) for t in w_total)
             portfolio.append(portfolio[-1]*(1+ret))
-            combined_weights.append((df.index[i], w_total))
+            combined_weights.append((dt, w_total))
 
-                    # --- serie combinada alineada ---
-            if len(portfolio) == len(df)-5:
-                trim_index = df.index[5:]
-            else:
-                trim_index = df.index[-len(portfolio):]
-            comb_series = pd.Series(portfolio, index=trim_index)
-            spy_series  = (df["SPY"]/df["SPY"].iloc[0])*initial_capital
-            spy_series  = spy_series.reindex(trim_index)
-            met_comb = calc_metrics(comb_series.pct_change().dropna())
-            met_spy  = calc_metrics(spy_series.pct_change().dropna())
+        # --- series finales alineadas ---
+        comb_series = pd.Series(portfolio, index=dates)
+        spy_series  = (df["SPY"]/df["SPY"].iloc[0])*initial_capital
+        spy_series  = spy_series.reindex(dates)
+        met_comb = calc_metrics(comb_series.pct_change().dropna())
         met_spy  = calc_metrics(spy_series.pct_change().dropna())
-        latest_date, latest_w = combined_weights[-1]
 
         # --- series individuales y correlaciones ---
         ind_series = {}
@@ -179,31 +176,17 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             for dt, w in sig:
                 ret = sum(w.get(t,0)*(df.loc[dt,t]/df.shift(1).loc[dt,t]-1) for t in w)
                 eq.append(eq[-1]*(1+ret))
-            ind_series[s] = pd.Series(eq, index=[sig[0][0]]+[d for d,_ in sig])
+            ser = pd.Series(eq, index=[sig[0][0]]+[d for d,_ in sig])
+            ser = ser.reindex(dates).fillna(method='ffill')
+            ind_series[s] = ser
 
-                        # --- series alineadas sin duplicados ni huecos ---
-            # 1) construimos df con retornos mensuales
-            ret_df = pd.DataFrame(index=df.index[5:])
-            ret_df["SPY"] = spy_series.pct_change().dropna()
-
-            for s in active:
-                # serie individual
-                if s == "DAA KELLER":
-                    sig = weights_daa(df, **ALL_STRATEGIES[s])
-                else:
-                    sig = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
-                                       ALL_STRATEGIES[s]["fill"])
-                eq = [initial_capital]
-                for dt, w in sig:
-                    ret = sum(w.get(t,0)*(df.loc[dt,t]/df.shift(1).loc[dt,t]-1) for t in w)
-                    eq.append(eq[-1]*(1+ret))
-                ser = pd.Series(eq, index=[sig[0][0]]+[d for d,_ in sig])
-                # alineamos al índice común y rellenamos NaN → 0
-                ret_df[s] = ser.reindex(ret_df.index).pct_change().fillna(0)
-
-            # 2) eliminamos duplicados y NaN
-            ret_df = ret_df[~ret_df.index.duplicated(keep='first')].dropna()
-            corr = ret_df.corr()    
+        # DataFrame de retornos para correlaciones
+        ret_df = pd.DataFrame(index=dates)
+        ret_df["SPY"] = spy_series.pct_change()
+        for s in active:
+            ret_df[s] = ind_series[s].pct_change()
+        ret_df = ret_df.dropna()
+        corr = ret_df.corr()
 
         # ---------- PESTAÑAS ----------
         tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
@@ -218,7 +201,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             with col2:
                 st.metric("MaxDD (Combinada)", f"{met_comb['MaxDD']} %")
                 st.metric("MaxDD (SPY)", f"{met_spy['MaxDD']} %")
-
             st.metric("Sharpe (Combinada)", met_comb["Sharpe"])
             st.metric("Sharpe (SPY)", met_spy["Sharpe"])
 
@@ -274,11 +256,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     corr.loc[[s, "SPY"], [c for c in corr.columns if c != s]]
                     .style.background_gradient(cmap="coolwarm", axis=None)
                 )
-
-                # Asignación final
-                last_ind, last_w_ind = ind_series[s].index[-1], combined_weights[-1][1]
-                st.write("Asignación final:")
-                st.json({k:f"{v*100:.2f}%" for k,v in last_w_ind.items() if k in ser.index.names})
 
 else:
     st.info("👈 Configura y ejecuta")
