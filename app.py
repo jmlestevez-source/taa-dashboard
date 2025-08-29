@@ -214,8 +214,16 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
 
         # --- series alineadas ---
         comb_series = pd.Series(portfolio, index=dates_for_portfolio)
-        spy_series = (df["SPY"] / df["SPY"].iloc[4] * initial_capital) if "SPY" in df.columns else pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
-        spy_series = spy_series.reindex(comb_series.index).ffill()  # Corregido: ffill() en lugar de fillna(method='ffill')
+        
+        # Crear SPY series correctamente alineada con el dataframe original
+        if "SPY" in df.columns:
+            spy_prices = df["SPY"]
+            spy_series = (spy_prices / spy_prices.iloc[4] * initial_capital)
+            # Alinear con las mismas fechas que comb_series
+            spy_series = spy_series.reindex(comb_series.index).ffill()
+        else:
+            # Fallback si no hay SPY
+            spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
 
         met_comb = calc_metrics(comb_series.pct_change().dropna())
         met_spy = calc_metrics(spy_series.pct_change().dropna())
@@ -265,7 +273,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 individual_dates.append(dt)
             
             ser = pd.Series(eq, index=individual_dates)
-            ser = ser.reindex(comb_series.index).ffill()  # Corregido: ffill() en lugar de fillna(method='ffill')
+            ser = ser.reindex(comb_series.index).ffill()
             ind_series[s] = ser
 
         # DataFrame de retornos para correlaciones
