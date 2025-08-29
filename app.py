@@ -6,6 +6,7 @@ from datetime import datetime
 import requests
 import time
 import random
+import matplotlib.pyplot as plt  # Añadido para las correlaciones
 
 # ------------- CONFIG -------------
 st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
@@ -116,7 +117,7 @@ def weights_roc4(df, universe, fill):
             best = max(fill_roc, key=fill_roc.get)
             extra = (6 - n_sel) * base
             weights[best] = weights.get(best, 0) + extra
-        sig.append((df.index[i], weights))  # Corregido: era 'w' pero debería ser 'weights'
+        sig.append((df.index[i], weights))
     return sig if sig else [(df.index[-1], {})]
 
 # ------------- MAIN -------------
@@ -139,8 +140,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
 
         # --- cálculo de pesos por estrategia y combinación ---
         portfolio = [initial_capital]
-        # empezamos en la fila 5 (índice 5)
-        dates_for_portfolio = []  # Lista para almacenar las fechas correspondientes
+        dates_for_portfolio = [df.index[4]]  # Incluimos la fecha inicial
+        
         for i in range(5, len(df)):
             w_total = {}
             for s in active:
@@ -155,34 +156,49 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
 
             ret = sum(w_total.get(t,0)*(df.iloc[i][t]/df.iloc[i-1][t]-1) for t in w_total)
             portfolio.append(portfolio[-1]*(1+ret))
-            dates_for_portfolio.append(df.index[i])  # Guardamos la fecha
+            dates_for_portfolio.append(df.index[i])
 
         # --- series alineadas ---
-        comb_series = pd.Series(portfolio, index=[df.index[4]] + dates_for_portfolio)  # Incluimos la fecha inicial
+        comb_series = pd.Series(portfolio, index=dates_for_portfolio)
         spy_series  = (df["SPY"]/df["SPY"].iloc[4]*initial_capital)
-        spy_series = spy_series.reindex(comb_series.index)
+        spy_series = spy_series.reindex(comb_series.index).fillna(method='ffill')
 
         met_comb = calc_metrics(comb_series.pct_change().dropna())
         met_spy  = calc_metrics(spy_series.pct_change().dropna())
 
         # --- series individuales y correlaciones ---
         ind_series = {}
+        signals_dict = {}  # Para almacenar las señales actuales
+        
         for s in active:
             if s == "DAA KELLER":
                 sig = weights_daa(df, **ALL_STRATEGIES[s])
             else:
                 sig = weights_roc4(df, ALL_STRATEGIES[s]["universe"],
                                    ALL_STRATEGIES[s]["fill"])
+            
+            # Guardar señales actuales
+            if sig:
+                signals_dict[s] = sig[-1][1]  # Última señal
+            
             eq = [initial_capital]
             individual_dates = [df.index[4]]  # Fecha inicial
-            for dt, w in sig:
-                if dt in df.index:
+            
+            for i in range(5, len(df)):
+                dt = df.index[i]
+                if i-1 < len(sig):
                     try:
-                        ret = sum(w.get(t,0)*(df.loc[dt,t]/df.shift(1).loc[dt,t]-1) for t in w if t in df.columns)
+                        w = sig[i-5][1] if i-5 < len(sig) else {}
+                        ret = sum(w.get(t,0)*(df.iloc[i][t]/df.iloc[i-1][t]-1) for t in w if t in df.columns)
                         eq.append(eq[-1]*(1+ret))
                         individual_dates.append(dt)
-                    except:
-                        pass
+                    except Exception as e:
+                        eq.append(eq[-1])
+                        individual_dates.append(dt)
+                else:
+                    eq.append(eq[-1])
+                    individual_dates.append(dt)
+            
             ser = pd.Series(eq, index=individual_dates)
             ser = ser.reindex(comb_series.index).fillna(method='ffill')
             ind_series[s] = ser
@@ -193,7 +209,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         for s in active:
             ret_df[s] = ind_series[s].pct_change()
         ret_df = ret_df.dropna()
-        corr = ret_df.corr()
+        
+        if not ret_df.empty:
+            corr = ret_df.corr()
+        else:
+            corr = pd.DataFrame()
 
         # ---------- PESTAÑAS ----------
         tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
@@ -211,11 +231,17 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.metric("Sharpe (Combinada)", met_comb["Sharpe"])
             st.metric("Sharpe (SPY)", met_spy["Sharpe"])
 
+            # Mostrar señales actuales
+            st.subheader("🎯 Señales Actuales")
+            if "DAA KELLER" in signals_dict:
+                st.write("**DAA KELLER (última señal):**", signals_dict["DAA KELLER"])
+            # Para otras estrategias se puede añadir similar
+
             # Equity
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=comb_series.index, y=comb_series, name="Combinada"))
             fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(dash="dash")))
-            fig.update_layout(height=400)
+            fig.update_layout(height=400, title="Equity Curve")
             st.plotly_chart(fig, use_container_width=True)
 
             # Drawdown
@@ -224,7 +250,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             fig_dd = go.Figure()
             fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada"))
             fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY"))
-            fig_dd.update_layout(height=300, yaxis_title="Drawdown %")
+            fig_dd.update_layout(height=300, yaxis_title="Drawdown %", title="Drawdown")
             st.plotly_chart(fig_dd, use_container_width=True)
 
         # ---- TABS INDIVIDUALES ----
@@ -242,11 +268,16 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     st.metric("Sharpe", met["Sharpe"])
                     st.metric("Vol", f"{met['Vol']} %")
 
+                # Mostrar señales actuales
+                st.subheader("🎯 Señales Actuales")
+                if s in signals_dict:
+                    st.write("**Última señal:**", signals_dict[s])
+
                 # Equity
                 fig = go.Figure()
                 fig.add_trace(go.Scatter(x=ser.index, y=ser, name=s))
                 fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(dash="dash")))
-                fig.update_layout(height=400)
+                fig.update_layout(height=400, title="Equity Curve")
                 st.plotly_chart(fig, use_container_width=True)
 
                 # Drawdown
@@ -254,15 +285,21 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 fig_dd = go.Figure()
                 fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s))
                 fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY"))
-                fig_dd.update_layout(height=300, yaxis_title="Drawdown %")
+                fig_dd.update_layout(height=300, yaxis_title="Drawdown %", title="Drawdown")
                 st.plotly_chart(fig_dd, use_container_width=True)
 
                 # Correlaciones
                 st.subheader("📊 Correlaciones")
-                st.dataframe(
-                    corr.loc[[s, "SPY"], [c for c in corr.columns if c != s]]
-                    .style.background_gradient(cmap="coolwarm", axis=None)
-                )
+                if not corr.empty and s in corr.columns:
+                    try:
+                        corr_display = corr.loc[[s, "SPY"], [c for c in corr.columns if c != s and c in corr.index]]
+                        st.dataframe(corr_display.style.background_gradient(cmap="coolwarm", axis=None))
+                    except:
+                        # Fallback sin estilo si hay problemas
+                        corr_display = corr.loc[[s, "SPY"], [c for c in corr.columns if c != s and c in corr.index]]
+                        st.dataframe(corr_display)
+                else:
+                    st.write("No hay datos suficientes para calcular correlaciones")
 
 else:
     st.info("👈 Configura y ejecuta")
