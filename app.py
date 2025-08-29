@@ -182,8 +182,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                 for s in active], []) + ["SPY"]))
         
         # Extender el rango de fechas para asegurar datos suficientes
-        extended_start = start_date - timedelta(days=365*2)  # 2 años antes
-        extended_end = end_date + timedelta(days=30)  # 1 mes después
+        extended_start = start_date - timedelta(days=365*3)  # 3 años antes
+        extended_end = end_date + timedelta(days=60)  # 2 meses después
         
         raw = download_once(tickers, extended_start, extended_end)
         if not raw:
@@ -195,7 +195,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.error("❌ No hay datos suficientes para el análisis.")
             st.stop()
 
-        # Filtrar dataframe al rango de fechas seleccionado
+        # Filtrar dataframe al rango de fechas seleccionado para resultados
         df_filtered = df[(df.index >= pd.Timestamp(start_date)) & (df.index <= pd.Timestamp(end_date))]
         if df_filtered.empty:
             st.error("❌ No hay datos en el rango de fechas seleccionado.")
@@ -262,7 +262,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         # Crear SPY series correctamente alineada
         if "SPY" in df_filtered.columns:
             spy_prices = df_filtered["SPY"]
-            if len(spy_prices) > 0 and spy_prices.iloc[0] > 0:
+            if len(spy_prices) > 0 and spy_prices.iloc[0] > 0 and not pd.isna(spy_prices.iloc[0]):
                 spy_series = (spy_prices / spy_prices.iloc[0] * initial_capital)
                 spy_series = spy_series.reindex(comb_series.index).ffill()
             else:
@@ -274,15 +274,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         met_spy = calc_metrics(spy_series.pct_change().dropna())
 
         # --- calcular señales individuales y combinadas ---
-        # Señales reales (hasta el último mes completo)
+        # Señales reales (último mes completo - datos hasta el final del mes anterior)
         signals_dict_last = {}
         combined_signal_last = {}
         
-        # Señales hipotéticas (hasta hoy, incluyendo datos más recientes)
+        # Señales hipotéticas (hoy - usando todos los datos disponibles hasta hoy)
         signals_dict_current = {}
         combined_signal_current = {}
         
-        # Calcular señales individuales - ÚLTIMA (REAL)
+        # Calcular señales individuales - ÚLTIMA (REAL) - usando df_filtered (hasta la fecha final seleccionada)
         for s in active:
             if s == "DAA KELLER":
                 try:
@@ -304,7 +304,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 except:
                     signals_dict_last[s] = {}
         
-        # Calcular señales individuales - ACTUAL (HIPOTÉTICA) usando todo el df
+        # Calcular señales individuales - ACTUAL (HIPOTÉTICA) - usando df completo (hasta hoy)
         for s in active:
             if s == "DAA KELLER":
                 try:
@@ -449,7 +449,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     "Actual (Hipotética)": str(current_pct) if current_pct else "-"
                 })
             
-            if signals_data:  # Corregido: condición completa con ':'
+            if len(signals_data) > 0:  # Corregido: condición completa
                 signals_df = pd.DataFrame(signals_data)
                 st.dataframe(signals_df, use_container_width=True)
 
