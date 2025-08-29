@@ -5,7 +5,6 @@ import plotly.graph_objects as go
 from datetime import datetime, timedelta
 import yfinance as yf
 import time
-import random
 from collections import defaultdict
 import os
 import pickle
@@ -65,71 +64,36 @@ def save_to_cache(ticker, start, end, data):
     except Exception as e:
         st.warning(f"⚠️ Error guardando {ticker} en caché: {e}")
 
-# ------------- DESCARGA (yfinance + stooq) -------------
+# ------------- DESCARGA (yfinance) -------------
 def download_ticker_data(ticker, start, end):
-    """Descarga datos de un ticker usando yfinance, con fallback a stooq"""
+    """Descarga datos de un ticker usando yfinance"""
     # Intentar cargar desde caché primero
     cached_data = load_from_cache(ticker, start, end)
     if cached_data is not None:
         return cached_data
     
-    max_retries = 3
-    
-    # Primero intentar con yfinance
-    for attempt in range(max_retries):
-        try:
-            st.write(f"📥 Intentando descargar {ticker} desde Yahoo Finance (intento {attempt + 1})...")
-            yf_ticker = yf.Ticker(ticker)
-            df = yf_ticker.history(start=start, end=end)
-            
-            if not df.empty and len(df) > 0:
-                # Resamplear a datos mensuales y tomar el último día del mes
-                df_monthly = df.resample('M').last()
+    try:
+        st.write(f"📥 Descargando {ticker} desde Yahoo Finance...")
+        yf_ticker = yf.Ticker(ticker)
+        df = yf_ticker.history(start=start, end=end, interval="1d")
+        
+        if not df.empty and len(df) > 0:
+            # Convertir a datos mensuales
+            df_monthly = df.resample('ME').last()  # 'ME' para fin de mes
+            if not df_monthly.empty:
                 df_monthly = df_monthly[['Close']].rename(columns={'Close': ticker})
                 df_monthly[ticker] = pd.to_numeric(df_monthly[ticker], errors='coerce')
-                st.write(f"✅ {ticker} descargado desde Yahoo Finance - {len(df_monthly)} registros")
+                st.write(f"✅ {ticker} descargado - {len(df_monthly)} registros")
                 save_to_cache(ticker, start, end, df_monthly)
                 return df_monthly
-            
-            # Si llegamos aquí, no hay datos, continuar con retry
-            if attempt < max_retries - 1:
-                time.sleep(5 * (2 ** attempt))  # Backoff exponencial
-                
-        except Exception as e:
-            st.warning(f"⚠️ Intento {attempt + 1} fallido para {ticker} en Yahoo Finance: {str(e)[:100]}...")
-            if attempt < max_retries - 1:
-                time.sleep(5 * (2 ** attempt))  # Backoff exponencial
-    
-    # Si yfinance falla, intentar con stooq
-    st.write(f"🔄 Intentando descargar {ticker} desde Stooq...")
-    try:
-        # Determinar el ticker para Stooq
-        if ticker in ['SPY', 'QQQ', 'IWM', 'EEM', 'EWJ', 'VGK', 'TLT', 'IEF', 'SHY', 'LQD', 'HYG', 'GLD', 'DBC', 'VNQ']:
-            stooq_ticker = f"{ticker}.US"
-        elif ticker == 'AGG':
-            stooq_ticker = "AGG.US"
+            else:
+                st.warning(f"⚠️ Datos mensuales vacíos para {ticker}")
         else:
-            stooq_ticker = f"{ticker}.US"
-        
-        # Intentar descargar desde Stooq
-        yf_stooq = yf.Ticker(stooq_ticker)
-        df_stooq = yf_stooq.history(start=start, end=end)
-        
-        if not df_stooq.empty and len(df_stooq) > 0:
-            # Resamplear a datos mensuales y tomar el último día del mes
-            df_stooq_monthly = df_stooq.resample('M').last()
-            df_stooq_monthly = df_stooq_monthly[['Close']].rename(columns={'Close': ticker})
-            df_stooq_monthly[ticker] = pd.to_numeric(df_stooq_monthly[ticker], errors='coerce')
-            st.write(f"✅ {ticker} descargado desde Stooq - {len(df_stooq_monthly)} registros")
-            save_to_cache(ticker, start, end, df_stooq_monthly)
-            return df_stooq_monthly
-        else:
-            st.warning(f"⚠️ No se encontraron datos para {ticker} en Stooq")
+            st.warning(f"⚠️ No se encontraron datos para {ticker}")
             
     except Exception as e:
-        st.warning(f"⚠️ Error descargando {ticker} desde Stooq: {str(e)[:100]}...")
+        st.error(f"❌ Error descargando {ticker}: {str(e)[:100]}...")
     
-    st.error(f"❌ No se pudo descargar {ticker} desde ninguna fuente")
     return pd.DataFrame()
 
 @st.cache_data(show_spinner=False)
@@ -148,6 +112,8 @@ def download_all_data(tickers, start, end):
                 st.warning(f"⚠️ {tk} no disponible")
         except Exception as e:
             st.error(f"❌ Error procesando {tk}: {e}")
+        # Pequeña pausa para evitar problemas de rate limit
+        time.sleep(0.1)
     
     bar.empty()
     return data
