@@ -154,6 +154,7 @@ def load_historical_data_from_csv(ticker):
     except Exception as e:
         st.error(f"❌ Error cargando {ticker} desde CSV: {str(e)}")
         return pd.DataFrame()
+
 def get_fmp_data(ticker, days=35):
     """Obtiene datos recientes de FMP"""
     try:
@@ -453,20 +454,21 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
              
         # Encontrar la fecha del último día del mes completo en df (señal "Real")
         last_data_date = df.index.max()
-        last_month_end_for_real_signal = last_data_date.to_period('M').to_timestamp('M')
-        
-        # Convertir a datetime para evitar problemas de comparación
+        # Obtener el último día del mes ANTERIOR al último dato disponible
+        # Esto es porque la señal "Real" se calcula con datos hasta el cierre del mes anterior
+        last_month_end_for_real_signal = (last_data_date - pd.DateOffset(days=last_data_date.day)).to_period('M').to_timestamp('M')
         last_month_end_for_real_signal = pd.Timestamp(last_month_end_for_real_signal)
-        
-        # Asegurar que el índice del DataFrame también sea pd.Timestamp para consistencia
-        df.index = pd.to_datetime(df.index)
-        
-        # Filtrar datos hasta la fecha límite
+
+        # Crear DataFrame para señal REAL (datos hasta el final del mes anterior)
         df_up_to_last_month_end = df[df.index <= last_month_end_for_real_signal]
-        st.write(f"🗓️ Fecha límite para señal 'Real': {last_month_end_for_real_signal.strftime('%Y-%m-%d')}")
-        
+
         # Señal HIPOTÉTICA (basada en todos los datos descargados)
-        df_full = df # Todos los datos disponibles
+        df_full = df  # Todos los datos disponibles
+
+        st.write(f"📊 Rango de datos completo: {df.index.min().strftime('%Y-%m-%d')} a {df.index.max().strftime('%Y-%m-%d')}")
+        st.write(f"📊 Rango de datos para señal Real: {df.index.min().strftime('%Y-%m-%d')} a {last_month_end_for_real_signal.strftime('%Y-%m-%d')}")
+        st.write(f"📊 Última fecha disponible: {last_data_date.strftime('%Y-%m-%d')}")
+        st.write(f"🗓️ Fecha límite para señal 'Real' (último día del mes anterior): {last_month_end_for_real_signal.strftime('%Y-%m-%d')}")
 
         signals_dict_last = {}
         signals_dict_current = {}
@@ -474,24 +476,30 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         for s in active:
             try:
                 if s == "DAA KELLER":
+                    # Señal REAL: usando datos hasta el final del mes anterior
                     sig_last = weights_daa(df_up_to_last_month_end, **ALL_STRATEGIES[s])
+                    # Señal HIPOTÉTICA: usando todos los datos
                     sig_current = weights_daa(df_full, **ALL_STRATEGIES[s])
-                else: # DUAL_ROC4
+                else:  # DUAL_ROC4
+                    # Señal REAL: usando datos hasta el final del mes anterior
                     sig_last = weights_roc4(df_up_to_last_month_end, 
                                           ALL_STRATEGIES[s]["universe"],
                                           ALL_STRATEGIES[s]["fill"])
+                    # Señal HIPOTÉTICA: usando todos los datos
                     sig_current = weights_roc4(df_full,
                                              ALL_STRATEGIES[s]["universe"],
                                              ALL_STRATEGIES[s]["fill"])
                 
                 # Guardar la última señal de cada tipo
                 if sig_last and len(sig_last) > 0:
-                    signals_dict_last[s] = sig_last[-1][1] # (fecha, pesos_dict)
+                    signals_dict_last[s] = sig_last[-1][1]  # (fecha, pesos_dict)
+                    st.write(f"📝 Señal REAL para {s}: {sig_last[-1][0].strftime('%Y-%m-%d')}")  # Mostrar fecha de la señal
                 else:
                     signals_dict_last[s] = {}
                     
                 if sig_current and len(sig_current) > 0:
                     signals_dict_current[s] = sig_current[-1][1]
+                    st.write(f"📝 Señal HIPOTÉTICA para {s}: {sig_current[-1][0].strftime('%Y-%m-%d')}")  # Mostrar fecha de la señal
                 else:
                     signals_dict_current[s] = {}
                     
@@ -658,7 +666,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 ind_series[s] = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                 ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
 
-# ---------- MOSTRAR RESULTADOS ----------
+        # ---------- MOSTRAR RESULTADOS ----------
         try:
             # Pestañas
             tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
@@ -666,11 +674,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             
             # ---- TAB 0: COMBINADA ----
             with tabs[0]:
-                # Añade estos mensajes de debug antes de mostrar las señales:
-                st.write(f"📊 Rango de datos completo: {df.index.min().strftime('%Y-%m-%d')} a {df.index.max().strftime('%Y-%m-%d')}")
-                st.write(f"📊 Rango de datos para señal Real: {df_up_to_last_month_end.index.min().strftime('%Y-%m-%d')} a {df_up_to_last_month_end.index.max().strftime('%Y-%m-%d')}")
-                st.write(f"📊 Última fecha del mes completo: {last_month_end_for_real_signal.strftime('%Y-%m-%d')}")
-                
                 col1, col2 = st.columns(2)
                 with col1:
                     st.metric("CAGR (Combinada)", f"{met_comb['CAGR']} %")
@@ -683,6 +686,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 
                 # Mostrar señales COMBINADAS
                 st.subheader("🎯 Señal Cartera Combinada")
+                
+                # Mostrar información de fechas
+                st.write(f"📊 Datos disponibles: {df.index.min().strftime('%Y-%m-%d')} a {df.index.max().strftime('%Y-%m-%d')}")
+                st.write(f"🗓️ Señal REAL calculada con datos hasta: {last_month_end_for_real_signal.strftime('%Y-%m-%d')}")
+                
                 # Combinar señales individuales para mostrar la combinada
                 combined_last = {}
                 combined_current = {}
@@ -701,8 +709,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 with col2:
                     st.write("**Actual (Hipotética):**")
                     st.dataframe(format_signal_for_display(combined_current), use_container_width=True, hide_index=True)
-
-               
 
                 # Gráficos
                 st.subheader("📈 Equity Curve")
