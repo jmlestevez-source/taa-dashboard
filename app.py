@@ -777,7 +777,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     for t, w in current_sig.items():
                         combined_current[t] = combined_current.get(t, 0) + w / len(active)
                 
-                col1, col2 = st.columns(2)
+                                col1, col2 = st.columns(2)
                 with col1:
                     # Mostrar la fecha de la señal "Real" y formatearla mejor
                     if signals_log and active: # Asumimos que signals_log tiene las fechas
@@ -791,12 +791,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     else:
                          st.write("**Última (Real):**")
                     # Usar el formateador mejorado
-                    st.dataframe(format_signal_for_display_improved(combined_last), use_container_width=True, hide_index=True)
+                    st.dataframe(format_signal_for_display(combined_last), use_container_width=True, hide_index=True)
                 with col2:
                     # Mostrar la fecha de la señal "Hipotética" (normalmente la fecha más reciente de los datos)
                      st.write(f"**Actual (Hipotética) - Cierre {df.index.max().strftime('%Y-%m-%d')}:**")
                     # Usar el formateador mejorado
-                    st.dataframe(format_signal_for_display_improved(combined_current), use_container_width=True, hide_index=True)
+                    st.dataframe(format_signal_for_display(combined_current), use_container_width=True, hide_index=True)
 
                 # Gráficos
                 st.subheader("📈 Equity Curve")
