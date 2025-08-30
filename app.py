@@ -169,7 +169,7 @@ def get_fmp_data(ticker, days=35):
         
         if response.status_code == 200:
             data = response.json()
-            if 'historical' in 
+            if 'historical' in data:
                 df = pd.DataFrame(data['historical'])
                 df['date'] = pd.to_datetime(df['date'])
                 df = df.set_index('date')
