@@ -169,7 +169,7 @@ def get_fmp_data(ticker, days=35):
         
         if response.status_code == 200:
             data = response.json()
-            if 'historical' in data:
+            if 'historical' in 
                 df = pd.DataFrame(data['historical'])
                 df['date'] = pd.to_datetime(df['date'])
                 df = df.set_index('date')
@@ -273,17 +273,31 @@ def clean_and_align(data_dict):
         return pd.DataFrame()
 
 # ------------- UTILS -------------
-def momentum_score(df, col):
-    if len(df) < 5:
-        return 0
-    if col not in df.columns:
-        return 0
-    if df[col].iloc[-5] == 0 or pd.isna(df[col].iloc[-5]):
-        return 0
-    if df[col].iloc[-5] <= 0:
+def momentum_score_keller(df, symbol):
+    """Momentum score para DAA Keller"""
+    if len(df) < 13:
         return 0
     try:
-        result = (df[col].iloc[-1] / df[col].iloc[-5]) - 1
+        p0, p1 = df[symbol].iloc[-1], df[symbol].iloc[-2]
+        p3 = df[symbol].iloc[-4]
+        p6 = df[symbol].iloc[-7]
+        p12 = df[symbol].iloc[-13]
+        return 12*(p0/p1) + 4*(p0/p3) + 2*(p0/p6) + (p0/p12) - 19
+    except Exception:
+        return 0
+
+def momentum_score_roc4(df, symbol):
+    """Momentum score para Dual Momentum ROC4"""
+    if len(df) < 5:
+        return 0
+    if symbol not in df.columns:
+        return 0
+    if df[symbol].iloc[-5] == 0 or pd.isna(df[symbol].iloc[-5]):
+        return 0
+    if df[symbol].iloc[-5] <= 0:
+        return 0
+    try:
+        result = (df[symbol].iloc[-1] / df[symbol].iloc[-5]) - 1
         return result
     except Exception:
         return 0
@@ -319,17 +333,22 @@ def calc_metrics(rets):
 
 # ------------- MOTORES -------------
 def weights_daa(df, risky, protect, canary):
-    if len(df) < 6:
+    """Calcula señales para DAA Keller"""
+    if len(df) < 13:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     
     sig = []
     
-    for i in range(5, len(df)):  # Comenzar desde el índice 5
+    # Calcular señales para cada mes disponible
+    for i in range(13, len(df) + 1):  # Comenzar desde el índice 13 (12 meses + 1)
         try:
-            # Filtrar tickers que realmente existen en el dataframe
-            can = {s: momentum_score(df.iloc[:i+1], s) for s in canary if s in df.columns}
-            ris = {s: momentum_score(df.iloc[:i+1], s) for s in risky if s in df.columns}
-            pro = {s: momentum_score(df.iloc[:i+1], s) for s in protect if s in df.columns}
+            # Usar datos hasta el mes i
+            df_subset = df.iloc[:i]
+            
+            # Calcular momentum scores
+            can = {s: momentum_score_keller(df_subset, s) for s in canary if s in df_subset.columns}
+            ris = {s: momentum_score_keller(df_subset, s) for s in risky if s in df_subset.columns}
+            pro = {s: momentum_score_keller(df_subset, s) for s in protect if s in df_subset.columns}
             
             n = sum(1 for v in can.values() if v <= 0)
             w = {}
@@ -349,24 +368,29 @@ def weights_daa(df, risky, protect, canary):
                 if top_r:
                     w = {t: 1/6 for t in top_r}
             
-            sig.append((df.index[i], w))
+            sig.append((df_subset.index[-1], w))
         except Exception as e:
             # En caso de error, añadir señal vacía para esta fecha
-            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
+            sig.append((df.index[i-1] if i <= len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
     
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_roc4(df, universe, fill):
+    """Calcula señales para Dual Momentum ROC4"""
     if len(df) < 6:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     
     sig = []
     base = 1/6
     
-    for i in range(5, len(df)):  # Comenzar desde el índice 5
+    # Calcular señales para cada mes disponible
+    for i in range(6, len(df) + 1):  # Comenzar desde el índice 6
         try:
-            roc = {s: momentum_score(df.iloc[:i+1], s) for s in universe if s in df.columns}
-            fill_roc = {s: momentum_score(df.iloc[:i+1], s) for s in fill if s in df.columns}
+            # Usar datos hasta el mes i
+            df_subset = df.iloc[:i]
+            
+            roc = {s: momentum_score_roc4(df_subset, s) for s in universe if s in df_subset.columns}
+            fill_roc = {s: momentum_score_roc4(df_subset, s) for s in fill if s in df_subset.columns}
             
             positive = [s for s, v in roc.items() if v > 0]
             selected = sorted(positive, key=lambda s: roc.get(s, float('-inf')), reverse=True)[:6]
@@ -382,10 +406,10 @@ def weights_roc4(df, universe, fill):
                     extra = (6 - n_sel) * base
                     weights[best] = weights.get(best, 0) + extra
             
-            sig.append((df.index[i], weights))
+            sig.append((df_subset.index[-1], weights))
         except Exception as e:
             # En caso de error, añadir señal vacía para esta fecha
-            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
+            sig.append((df.index[i-1] if i <= len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
     
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
@@ -402,7 +426,7 @@ def format_signal_for_display(signal_dict):
                 "Ticker": ticker,
                 "Peso (%)": f"{weight * 100:.2f}"
             })
-    if not formatted_data:
+    if not formatted_
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
@@ -524,12 +548,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             portfolio = [initial_capital]
             dates_for_portfolio = []
             
-            if len(df_filtered) < 6:
+            if len(df_filtered) < 13:  # Necesitamos al menos 13 meses para DAA Keller
                  st.error("❌ No hay suficientes datos en el rango filtrado.")
                  st.stop()
 
-            # Empezar desde un índice que tenga suficientes datos para momentum (índice 5)
-            start_calc_index = 5
+            # Empezar desde un índice que tenga suficientes datos para momentum (índice 13 para DAA Keller)
+            start_calc_index = 13
             if start_calc_index >= len(df_filtered):
                 start_calc_index = len(df_filtered) - 1
                 
@@ -620,6 +644,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         # --- cálculo de series individuales ---
         ind_series = {}
         ind_metrics = {}
+        ind_returns = {}  # Para calcular correlaciones
         
         for s in active:
             try:
@@ -632,6 +657,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 
                 eq = [initial_capital]
                 individual_dates = [df_filtered.index[start_calc_index-1]] if start_calc_index > 0 and start_calc_index-1 < len(df_filtered) else [df_filtered.index[0]]
+                returns = []
                 
                 for i in range(start_calc_index, len(df_filtered)):
                     ret = 0
@@ -652,6 +678,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         pass
                     
                     eq.append(eq[-1] * (1 + ret))
+                    returns.append(ret)
                     if i < len(df_filtered):
                         individual_dates.append(df_filtered.index[i])
                 
@@ -660,11 +687,13 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 ser = ser.reindex(comb_series.index, method='ffill').fillna(method='ffill').fillna(method='bfill')
                 ind_series[s] = ser
                 ind_metrics[s] = calc_metrics(ser.pct_change().dropna())
+                ind_returns[s] = pd.Series(returns, index=ser.index[1:])  # Excluir el primer valor que es NaN
                 
             except Exception as e:
                 st.error(f"Error calculando serie para {s}: {e}")
                 ind_series[s] = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                 ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
+                ind_returns[s] = pd.Series([0] * (len(comb_series)-1), index=comb_series.index[1:])
 
         # ---------- MOSTRAR RESULTADOS ----------
         try:
@@ -731,6 +760,27 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                           fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
                 fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
                 st.plotly_chart(fig_dd, use_container_width=True)
+                
+                # Tabla de correlaciones
+                st.subheader("🔗 Correlaciones")
+                try:
+                    # Preparar datos para correlaciones
+                    corr_data = {}
+                    corr_data["Cartera Combinada"] = comb_series.pct_change().dropna()
+                    corr_data["SPY"] = spy_series.pct_change().dropna()
+                    for s in active:
+                        corr_data[s] = ind_series[s].pct_change().dropna()
+                    
+                    # Alinear todas las series
+                    aligned_data = pd.DataFrame(corr_data)
+                    
+                    # Calcular matriz de correlaciones
+                    corr_matrix = aligned_data.corr()
+                    
+                    # Mostrar tabla de correlaciones
+                    st.dataframe(corr_matrix.round(3), use_container_width=True)
+                except Exception as e:
+                    st.warning(f"No se pudieron calcular las correlaciones: {e}")
                 
         except Exception as e:
             st.error(f"❌ Error mostrando resultados combinados: {e}")
