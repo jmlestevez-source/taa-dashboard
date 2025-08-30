@@ -339,8 +339,8 @@ def weights_daa(df, risky, protect, canary):
     
     sig = []
     
-    # Calcular señales para cada mes disponible
-    for i in range(13, len(df) + 1):  # Comenzar desde el índice 13 (12 meses + 1)
+    # Calcular señales para cada mes disponible (desde el mes 13 en adelante)
+    for i in range(13, len(df) + 1):  # Comenzar desde el índice 13
         try:
             # Usar datos hasta el mes i
             df_subset = df.iloc[:i]
@@ -383,7 +383,7 @@ def weights_roc4(df, universe, fill):
     sig = []
     base = 1/6
     
-    # Calcular señales para cada mes disponible
+    # Calcular señales para cada mes disponible (desde el mes 6 en adelante)
     for i in range(6, len(df) + 1):  # Comenzar desde el índice 6
         try:
             # Usar datos hasta el mes i
@@ -479,7 +479,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         # Encontrar la fecha del último día del mes completo en df (señal "Real")
         last_data_date = df.index.max()
         # Obtener el último día del mes ANTERIOR al último dato disponible
-        # Esto es porque la señal "Real" se calcula con datos hasta el cierre del mes anterior
         last_month_end_for_real_signal = (last_data_date - pd.DateOffset(days=last_data_date.day)).to_period('M').to_timestamp('M')
         last_month_end_for_real_signal = pd.Timestamp(last_month_end_for_real_signal)
 
@@ -496,6 +495,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
 
         signals_dict_last = {}
         signals_dict_current = {}
+        signals_log = {}  # Log temporal de señales
         
         for s in active:
             try:
@@ -527,6 +527,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 else:
                     signals_dict_current[s] = {}
                     
+                # Guardar log de todas las señales para debugging
+                signals_log[s] = {
+                    "real": sig_last,
+                    "hypothetical": sig_current
+                }
+                
             except Exception as e:
                 st.error(f"Error calculando señales para {s}: {e}")
                 signals_dict_last[s] = {}
@@ -545,6 +551,26 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
 
         # --- cálculo de cartera combinada ---
         try:
+            # Mostrar log de señales para debugging
+            st.subheader("📋 Log de Señales Mensuales (Debug)")
+            for s in active:
+                st.write(f"**{s} - Señales Reales:**")
+                if s in signals_log and signals_log[s]["real"]:
+                    signal_df = pd.DataFrame([
+                        {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str(sig[1])} 
+                        for sig in signals_log[s]["real"]
+                    ])
+                    st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)  # Mostrar últimas 10 señales
+                else:
+                    st.write("No hay señales disponibles")
+                
+                st.write(f"**{s} - Señal Hipotética Actual:**")
+                if s in signals_log and signals_log[s]["hypothetical"]:
+                    hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
+                    st.write(f"Fecha: {hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else hyp_signal[0]}")
+                    st.write(f"Señal: {hyp_signal[1]}")
+                st.markdown("---")
+            
             portfolio = [initial_capital]
             dates_for_portfolio = []
             
@@ -552,7 +578,17 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                  st.error("❌ No hay suficientes datos en el rango filtrado.")
                  st.stop()
 
-            # Empezar desde un índice que tenga suficientes datos para momentum (índice 13 para DAA Keller)
+            # Obtener señales para todo el período filtrado
+            strategy_signals = {}
+            for s in active:
+                if s == "DAA KELLER":
+                    strategy_signals[s] = weights_daa(df_filtered, **ALL_STRATEGIES[s])
+                else:
+                    strategy_signals[s] = weights_roc4(df_filtered, 
+                                                    ALL_STRATEGIES[s]["universe"],
+                                                    ALL_STRATEGIES[s]["fill"])
+            
+            # Empezar desde un índice que tenga suficientes datos para momentum
             start_calc_index = 13
             if start_calc_index >= len(df_filtered):
                 start_calc_index = len(df_filtered) - 1
@@ -560,40 +596,26 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             if start_calc_index >= 0 and start_calc_index < len(df_filtered):
                 dates_for_portfolio.append(df_filtered.index[start_calc_index-1])
 
-            # Calcular retornos de la cartera combinada
+            # Calcular retornos de la cartera combinada usando señales rotacionales
             for i in range(start_calc_index, len(df_filtered)):
                 w_total = {}
                 for s in active:
-                    if s == "DAA KELLER":
-                        try:
-                            sig_result = weights_daa(df_filtered.iloc[:i+1], **ALL_STRATEGIES[s])
-                            if sig_result and len(sig_result) > 0:
-                                _, w = sig_result[-1]
-                                # Combinar pesos
-                                for t, v in w.items():
-                                    w_total[t] = w_total.get(t, 0) + v / len(active)
-                        except Exception as e:
-                            pass
-                    else:
-                        try:
-                            sig_result = weights_roc4(df_filtered.iloc[:i+1],
-                                                    ALL_STRATEGIES[s]["universe"],
-                                                    ALL_STRATEGIES[s]["fill"])
-                            if sig_result and len(sig_result) > 0:
-                                _, w = sig_result[-1]
-                                # Combinar pesos
-                                for t, v in w.items():
-                                    w_total[t] = w_total.get(t, 0) + v / len(active)
-                        except Exception as e:
-                            pass
+                    if s in strategy_signals and len(strategy_signals[s]) > 0:
+                        # Encontrar la señal correspondiente a este período
+                        signal_idx = min(i - start_calc_index, len(strategy_signals[s]) - 1)
+                        if signal_idx >= 0:
+                            _, weights = strategy_signals[s][signal_idx]
+                            # Combinar pesos
+                            for ticker, weight in weights.items():
+                                w_total[ticker] = w_total.get(ticker, 0) + weight / len(active)
                 
                 # Calcular retorno de la cartera para este período
                 ret = 0
-                for t, weight in w_total.items():
-                    if t in df_filtered.columns and i > 0:
+                for ticker, weight in w_total.items():
+                    if ticker in df_filtered.columns and i > 0:
                         try:
-                            if df_filtered.iloc[i-1][t] != 0 and not pd.isna(df_filtered.iloc[i-1][t]) and not pd.isna(df_filtered.iloc[i][t]):
-                                asset_ret = (df_filtered.iloc[i][t] / df_filtered.iloc[i-1][t]) - 1
+                            if df_filtered.iloc[i-1][ticker] != 0 and not pd.isna(df_filtered.iloc[i-1][ticker]) and not pd.isna(df_filtered.iloc[i][ticker]):
+                                asset_ret = (df_filtered.iloc[i][ticker] / df_filtered.iloc[i-1][ticker]) - 1
                                 ret += weight * asset_ret
                         except Exception:
                             pass  # Ignorar errores individuales de assets
@@ -769,10 +791,13 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     corr_data["Cartera Combinada"] = comb_series.pct_change().dropna()
                     corr_data["SPY"] = spy_series.pct_change().dropna()
                     for s in active:
-                        corr_data[s] = ind_series[s].pct_change().dropna()
+                        if s in ind_series:
+                            corr_data[s] = ind_series[s].pct_change().dropna()
                     
-                    # Alinear todas las series
-                    aligned_data = pd.DataFrame(corr_data)
+                    # Crear DataFrame con todas las series
+                    aligned_data = pd.DataFrame()
+                    for name, series in corr_data.items():
+                        aligned_data[name] = series
                     
                     # Calcular matriz de correlaciones
                     corr_matrix = aligned_data.corr()
