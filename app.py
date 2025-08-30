@@ -430,30 +430,6 @@ def format_signal_for_display(signal_dict):
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
-def format_signal_for_display_improved(signal_dict):
-    """
-    Formatea un diccionario de señal para mostrarlo como tabla con columnas separadas.
-    Similar al estilo del código inicial de DAA Keller.
-    """
-    if not signal_dict:
-        return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
-    
-    formatted_data = []
-    for ticker, weight in signal_dict.items():
-        if weight > 0: # Solo mostrar tickers con peso > 0
-            formatted_data.append({
-                "Ticker": ticker,
-                "Peso (%)": f"{weight * 100:.2f}" # Formato de porcentaje con 2 decimales
-            })
-    
-    if not formatted_data:
-        return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
-    
-    df_result = pd.DataFrame(formatted_data)
-    # Asegurar que las columnas estén en el orden deseado
-    df_result = df_result[["Ticker", "Peso (%)"]]
-    return df_result
-
 # ------------- MAIN -------------
 if st.sidebar.button("🚀 Ejecutar", type="primary"):
     if not active:
@@ -612,7 +588,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                                     ALL_STRATEGIES[s]["universe"],
                                                     ALL_STRATEGIES[s]["fill"])
             
-            # Empezar desde un índice que tenga suficientes datos para momentum
+            # Empezar desde un índice que tenga suficientes datos para momentum (índice 13)
             start_calc_index = 13
             if start_calc_index >= len(df_filtered):
                 start_calc_index = len(df_filtered) - 1
@@ -779,23 +755,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    # Mostrar la fecha de la señal "Real" y formatearla mejor
-                    if signals_log and active: # Asumimos que signals_log tiene las fechas
-                        # Tomar la fecha de la última señal real de la primera estrategia como referencia
-                        first_strategy = list(signals_log.keys())[0] if signals_log else None
-                        if first_strategy and signals_log[first_strategy]["real"]:
-                            last_real_date = signals_log[first_strategy]["real"][-1][0] # (fecha, pesos)
-                            st.write(f"**Última (Real) - Cierre {last_real_date.strftime('%Y-%m-%d')}:**")
-                        else:
-                            st.write("**Última (Real):**")
-                    else:
-                         st.write("**Última (Real):**")
-                    # Usar el formateador mejorado
+                    st.write("**Última (Real):**")
                     st.dataframe(format_signal_for_display(combined_last), use_container_width=True, hide_index=True)
                 with col2:
-                    # Mostrar la fecha de la señal "Hipotética" (normalmente la fecha más reciente de los datos)
-                     st.write(f"**Actual (Hipotética) - Cierre {df.index.max().strftime('%Y-%m-%d')}:**")
-                    # Usar el formateador mejorado
+                    st.write("**Actual (Hipotética):**")
                     st.dataframe(format_signal_for_display(combined_current), use_container_width=True, hide_index=True)
 
                 # Gráficos
@@ -831,18 +794,16 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         if s in ind_series:
                              corr_data[s] = ind_series[s].pct_change().dropna()
                     
-                    # Crear DataFrame con todas las series alineadas
-                    aligned_data = pd.DataFrame(corr_data).dropna()
+                    # Crear DataFrame con todas las series
+                    aligned_data = pd.DataFrame()
+                    for name, series in corr_data.items():
+                        aligned_data[name] = series
                     
-                    if not aligned_data.empty and len(aligned_data.columns) > 1:
-                        # Calcular matriz de correlaciones
-                        corr_matrix = aligned_data.corr()
-                        
-                        # Mostrar tabla de correlaciones
-                        st.dataframe(corr_matrix.round(3), use_container_width=True)
-                    else:
-                        st.warning("No hay suficientes datos alineados para calcular correlaciones.")
-                        
+                    # Calcular matriz de correlaciones
+                    corr_matrix = aligned_data.corr()
+                    
+                    # Mostrar tabla de correlaciones
+                    st.dataframe(corr_matrix.round(3), use_container_width=True)
                 except Exception as e:
                     st.warning(f"No se pudieron calcular las correlaciones: {e}")
                 
@@ -871,17 +832,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         st.subheader("🎯 Señales")
                         col1, col2 = st.columns(2)
                         with col1:
-                            # Mostrar la fecha de la señal "Real" para la estrategia individual
-                            if s in signals_log and signals_log[s]["real"]:
-                                last_real_date = signals_log[s]["real"][-1][0] # (fecha, pesos)
-                                st.write(f"**Última (Real) - Cierre {last_real_date.strftime('%Y-%m-%d')}:**")
-                            else:
-                                st.write("**Última (Real):**")
-                            st.dataframe(format_signal_for_display_improved(signals_dict_last.get(s, {})), use_container_width=True, hide_index=True)
+                            st.write("**Última (Real):**")
+                            st.dataframe(format_signal_for_display(signals_dict_last.get(s, {})), use_container_width=True, hide_index=True)
                         with col2:
-                             # Mostrar la fecha de la señal "Hipotética" para la estrategia individual
-                             st.write(f"**Actual (Hipotética) - Cierre {df.index.max().strftime('%Y-%m-%d')}:**")
-                            st.dataframe(format_signal_for_display_improved(signals_dict_current.get(s, {})), use_container_width=True, hide_index=True)
+                            st.write("**Actual (Hipotética):**")
+                            st.dataframe(format_signal_for_display(signals_dict_current.get(s, {})), use_container_width=True, hide_index=True)
 
                         # Gráficos individuales
                         st.subheader("📈 Equity Curve")
