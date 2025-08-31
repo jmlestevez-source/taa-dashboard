@@ -22,22 +22,27 @@ start_date = st.sidebar.date_input("Fecha de inicio", datetime(2015, 1, 1))
 end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today())
 
 DAA_KELLER = {
-    "risky":   ['SPY','IWM','QQQ','VGK','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD'],
+    "risky":   ['SPY','IWM','QQQ','IEV','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD'],
     "protect": ['SHY','IEF','LQD'],
     "canary":  ['EEM','AGG']
 }
 DUAL_ROC4 = {
-    "universe":['SPY','IWM','QQQ','VGK','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD','IEF'],
+    "universe":['SPY','IWM','QQQ','IEV','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD','IEF'],
     "fill":    ['IEF','TLT','SHY']
 }
 ACCEL_DUAL_MOM = {
-    "equity": ['SPY', 'VGK'],
+    "equity": ['SPY', 'IEV'],
     "protective": ['TLT', 'IEF', 'SHY', 'TIP']
+}
+VAA_12 = {
+    "risky": ['SPY', 'IWM', 'QQQ', 'IEV', 'EWJ', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'LQD', 'HYG'],
+    "safe": ['IEF', 'LQD', 'BIL']
 }
 ALL_STRATEGIES = {
     "DAA KELLER": DAA_KELLER, 
     "Dual Momentum ROC4": DUAL_ROC4,
-    "Accelerated Dual Momentum": ACCEL_DUAL_MOM
+    "Accelerated Dual Momentum": ACCEL_DUAL_MOM,
+    "VAA-12": VAA_12
 }
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
@@ -340,7 +345,7 @@ def clean_and_align(data_dict):
 
 # ------------- UTILS -------------
 def momentum_score_keller(df, symbol):
-    """Momentum score para DAA Keller"""
+    """Momentum score para DAA Keller, VAA-12"""
     if len(df) < 13:
         return 0
     try:
@@ -652,6 +657,99 @@ def weights_accel_dual_mom(df, equity, protective):
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
+def weights_vaa_12(df, risky, safe):
+    """Calcula señales para VAA-12"""
+    # Necesita al menos 13 meses de datos (igual que DAA Keller)
+    if len(df) < 13:
+        return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+    
+    sig = []
+    # Calcular señales para cada mes disponible (desde el mes 13 en adelante)
+    for i in range(13, len(df)):
+        try:
+            df_subset = df.iloc[:i] # Datos hasta el final del mes i-1
+            
+            # 1. Calcular momentum scores para todos los activos
+            risky_mom = {s: momentum_score_keller(df_subset, s) for s in risky if s in df_subset.columns}
+            safe_mom = {s: momentum_score_keller(df_subset, s) for s in safe if s in df_subset.columns}
+            
+            # 2. Contar activos riesgosos con momentum <= 0
+            n = sum(1 for mom in risky_mom.values() if mom <= 0)
+            
+            # 3. Determinar asignación basada en 'n'
+            w = {}
+            if n >= 4 and safe_mom:
+                # 100% en el activo seguro con mejor momentum
+                best_safe = max(safe_mom, key=safe_mom.get)
+                w = {best_safe: 1.0}
+            elif n == 3 and safe_mom and risky_mom:
+                # 75% en el mejor activo seguro, 25% en los 5 mejores riesgosos
+                best_safe = max(safe_mom, key=safe_mom.get)
+                top_risky = sorted(risky_mom, key=risky_mom.get, reverse=True)[:5]
+                w = {best_safe: 0.75}
+                w.update({t: 0.25/5 for t in top_risky})
+            elif n == 2 and safe_mom and risky_mom:
+                # 50% en el mejor activo seguro, 50% en los 5 mejores riesgosos
+                best_safe = max(safe_mom, key=safe_mom.get)
+                top_risky = sorted(risky_mom, key=risky_mom.get, reverse=True)[:5]
+                w = {best_safe: 0.5}
+                w.update({t: 0.5/5 for t in top_risky})
+            elif n == 1 and safe_mom and risky_mom:
+                # 25% en el mejor activo seguro, 75% en los 5 mejores riesgosos
+                best_safe = max(safe_mom, key=safe_mom.get)
+                top_risky = sorted(risky_mom, key=risky_mom.get, reverse=True)[:5]
+                w = {best_safe: 0.25}
+                w.update({t: 0.75/5 for t in top_risky})
+            elif n == 0 and risky_mom:
+                # 100% en los 5 mejores activos riesgosos
+                top_risky = sorted(risky_mom, key=risky_mom.get, reverse=True)[:5]
+                w = {t: 1.0/5 for t in top_risky}
+            # Si no hay activos disponibles en una categoría requerida, se mantiene la cartera vacía
+            
+            # Añadir la señal calculada para el inicio del mes i
+            sig.append((df.index[i], w))
+        except Exception as e:
+            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
+
+    # Añadir señal para el último mes disponible (si hay suficientes datos)
+    if len(df) >= 13:
+        try:
+            df_subset = df # Todos los datos disponibles
+            risky_mom = {s: momentum_score_keller(df_subset, s) for s in risky if s in df_subset.columns}
+            safe_mom = {s: momentum_score_keller(df_subset, s) for s in safe if s in df_subset.columns}
+            n = sum(1 for mom in risky_mom.values() if mom <= 0)
+            
+            w = {}
+            if n >= 4 and safe_mom:
+                best_safe = max(safe_mom, key=safe_mom.get)
+                w = {best_safe: 1.0}
+            elif n == 3 and safe_mom and risky_mom:
+                best_safe = max(safe_mom, key=safe_mom.get)
+                top_risky = sorted(risky_mom, key=risky_mom.get, reverse=True)[:5]
+                w = {best_safe: 0.75}
+                w.update({t: 0.25/5 for t in top_risky})
+            elif n == 2 and safe_mom and risky_mom:
+                best_safe = max(safe_mom, key=safe_mom.get)
+                top_risky = sorted(risky_mom, key=risky_mom.get, reverse=True)[:5]
+                w = {best_safe: 0.5}
+                w.update({t: 0.5/5 for t in top_risky})
+            elif n == 1 and safe_mom and risky_mom:
+                best_safe = max(safe_mom, key=safe_mom.get)
+                top_risky = sorted(risky_mom, key=risky_mom.get, reverse=True)[:5]
+                w = {best_safe: 0.25}
+                w.update({t: 0.75/5 for t in top_risky})
+            elif n == 0 and risky_mom:
+                top_risky = sorted(risky_mom, key=risky_mom.get, reverse=True)[:5]
+                w = {t: 1.0/5 for t in top_risky}
+            
+            sig.append((df.index[-1], w))
+        except Exception as e:
+            sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
+    
+    # Eliminar duplicados por fecha manteniendo el último (más reciente)
+    sig = list({s[0]: s for s in sig}.values())
+    return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+
 # ------------- FUNCIONES AUXILIARES PARA SEÑALES -------------
 def format_signal_for_display(signal_dict):
     """Formatea un diccionario de señal para mostrarlo como tabla"""
@@ -665,7 +763,7 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}" # Convertir decimal a porcentaje con 3 decimales
              })
-    if not formatted_data:
+    if not formatted_data: # Corrección del error de sintaxis
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
@@ -679,7 +777,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         all_tickers_needed = set()
         for s in active:
             strategy = ALL_STRATEGIES[s]
-            for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective"]:
+            for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective", "safe"]:
                 if key in strategy:
                     all_tickers_needed.update(strategy[key])
         all_tickers_needed.add("SPY")  # Siempre necesitamos SPY para benchmark
@@ -747,6 +845,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_current = weights_accel_dual_mom(df_full,
                                                        ALL_STRATEGIES[s]["equity"],
                                                        ALL_STRATEGIES[s]["protective"])
+                elif s == "VAA-12":
+                    # Señal REAL: usando datos hasta el final del mes anterior
+                    sig_last = weights_vaa_12(df_up_to_last_month_end,
+                                            ALL_STRATEGIES[s]["risky"],
+                                            ALL_STRATEGIES[s]["safe"])
+                    # Señal HIPOTÉTICA: usando todos los datos
+                    sig_current = weights_vaa_12(df_full,
+                                               ALL_STRATEGIES[s]["risky"],
+                                               ALL_STRATEGIES[s]["safe"])
                 # Guardar la última señal de cada tipo
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]  # (fecha, pesos_dict)
@@ -815,6 +922,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     strategy_signals[s] = weights_accel_dual_mom(df_filtered,
                                                                ALL_STRATEGIES[s]["equity"],
                                                                ALL_STRATEGIES[s]["protective"])
+                elif s == "VAA-12":
+                    strategy_signals[s] = weights_vaa_12(df_filtered,
+                                                       ALL_STRATEGIES[s]["risky"],
+                                                       ALL_STRATEGIES[s]["safe"])
 
             # 2. Preparar estructura para la cartera combinada
             # Las fechas de rebalanceo son las fechas de las señales
@@ -955,6 +1066,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      sig_list = weights_accel_dual_mom(df_filtered,
                                                      ALL_STRATEGIES[s]["equity"],
                                                      ALL_STRATEGIES[s]["protective"])
+                 elif s == "VAA-12":
+                     sig_list = weights_vaa_12(df_filtered,
+                                             ALL_STRATEGIES[s]["risky"],
+                                             ALL_STRATEGIES[s]["safe"])
 
                  # Extraer fechas de rebalanceo y señales para esta estrategia
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
