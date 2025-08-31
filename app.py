@@ -433,10 +433,10 @@ def roc_12(df, symbol):
     try:
         p0 = df[symbol].iloc[-1]       # Precio hoy
         p12 = df[symbol].iloc[-13]     # Precio hace 12 meses (12 filas atrás)
-
+        
         if p12 <= 0:
             return float('-inf') # Penalizar divisiones por cero o precios negativos
-
+        
         return (p0 / p12) - 1
     except Exception:
         return float('-inf') # Penalizar errores
@@ -448,10 +448,10 @@ def roc_3(df, symbol):
     try:
         p0 = df[symbol].iloc[-1]      # Precio hoy
         p3 = df[symbol].iloc[-4]      # Precio hace 3 meses (3 filas atrás)
-
+        
         if p3 <= 0:
             return float('-inf') # Penalizar divisiones por cero o precios negativos
-
+        
         return (p0 / p3) - 1
     except Exception:
         return float('-inf') # Penalizar errores
@@ -462,7 +462,7 @@ def roc_6(df, symbol):
         return float('-inf') # Penalizar por no tener suficientes datos
     try:
         p0 = df[symbol].iloc[-1]      # Precio hoy
-        p6 = df[symbol].iloc[-7]      # Precio hace 6 meses
+        p6 = df[symbol].iloc[-7]      # Precio hace 6 meses (6 filas atrás)
 
         if p6 <= 0:
             return float('-inf') # Penalizar divisiones por cero o precios negativos
@@ -470,6 +470,42 @@ def roc_6(df, symbol):
         return (p0 / p6) - 1
     except Exception:
         return float('-inf') # Penalizar errores
+
+def sma_12(df, symbol):
+    """Calcula la media móvil simple de 12 meses"""
+    if len(df) < 12:
+        return 0 # O float('nan') si prefieres manejarlo como tal
+    try:
+        # Tomar los últimos 12 meses de precios de cierre
+        prices = df[symbol].iloc[-12:]
+        if prices.isnull().any() or (prices <= 0).any():
+            return 0
+        return prices.mean()
+    except Exception:
+        return 0
+
+def momentum_score_13612w(df, symbol):
+    """Calcula el momentum score 13612W"""
+    if len(df) < 13: # Necesita al menos 13 meses de datos (hoy y hace 12 meses)
+        return 0 # Penalizar por no tener suficientes datos
+    try:
+        p0 = df[symbol].iloc[-1]  # Precio hoy
+        p1 = df[symbol].iloc[-2]  # Precio hace 1 mes
+        p3 = df[symbol].iloc[-4]  # Precio hace 3 meses
+        p6 = df[symbol].iloc[-7]  # Precio hace 6 meses
+        p12 = df[symbol].iloc[-13] # Precio hace 12 meses
+
+        if p1 <= 0 or p3 <= 0 or p6 <= 0 or p12 <= 0:
+            return 0 # Evitar divisiones por cero o precios negativos
+
+        roc_1 = (p0 / p1) - 1
+        roc_3 = (p0 / p3) - 1
+        roc_6 = (p0 / p6) - 1
+        roc_12 = (p0 / p12) - 1
+
+        return 12 * roc_1 + 4 * roc_3 + 2 * roc_6 + 1 * roc_12
+    except Exception:
+        return 0 # Penalizar errores
 
 def calc_metrics(rets):
     rets = rets.dropna()
@@ -1231,7 +1267,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 all_tickers_needed.update(strategy["risky"])
                 all_tickers_needed.update(strategy["defensive"])
             elif s == "BAA Aggressive":
-                # Añadir activos ofensivos, defensivos y canarios
+                # Añadir activos de riesgo, defensivos y canarios
                 all_tickers_needed.update(strategy["offensive"])
                 all_tickers_needed.update(strategy["defensive"])
                 all_tickers_needed.update(strategy["canary"])
@@ -1330,8 +1366,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 elif s == "Quint Switching Filtered":
                     # Señal REAL: usando datos hasta el final del mes anterior
                     sig_last = weights_quint_switching_filtered(df_up_to_last_month_end,
-                                                              ALL_STRATEGIES[s]["risky"],
-                                                              ALL_STRATEGIES[s]["defensive"])
+                                                               ALL_STRATEGIES[s]["risky"],
+                                                               ALL_STRATEGIES[s]["defensive"])
                     # Señal HIPOTÉTICA: usando todos los datos
                     sig_current = weights_quint_switching_filtered(df_full,
                                                                  ALL_STRATEGIES[s]["risky"],
@@ -1350,12 +1386,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 elif s == "Sistema Descorrelación":
                     # Señal REAL: usando datos hasta el final del mes anterior
                     sig_last = weights_sistema_descorrelacion(df_up_to_last_month_end,
-                                                            ALL_STRATEGIES[s]["main"],
-                                                            ALL_STRATEGIES[s]["secondary"])
+                                                             ALL_STRATEGIES[s]["main"],
+                                                             ALL_STRATEGIES[s]["secondary"])
                     # Señal HIPOTÉTICA: usando todos los datos
                     sig_current = weights_sistema_descorrelacion(df_full,
-                                                               ALL_STRATEGIES[s]["main"],
-                                                               ALL_STRATEGIES[s]["secondary"])
+                                                                 ALL_STRATEGIES[s]["main"],
+                                                                 ALL_STRATEGIES[s]["secondary"])
                 # Guardar la última señal de cada tipo
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]  # (fecha, pesos_dict)
@@ -1434,8 +1470,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                                                    ALL_STRATEGIES[s]["benchmark"])
                 elif s == "Quint Switching Filtered":
                     strategy_signals[s] = weights_quint_switching_filtered(df_filtered,
-                                                                         ALL_STRATEGIES[s]["risky"],
-                                                                         ALL_STRATEGIES[s]["defensive"])
+                                                                       ALL_STRATEGIES[s]["risky"],
+                                                                       ALL_STRATEGIES[s]["defensive"])
                 elif s == "BAA Aggressive":
                     strategy_signals[s] = weights_baa_aggressive(df_filtered,
                                                                ALL_STRATEGIES[s]["offensive"],
