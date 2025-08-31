@@ -150,71 +150,110 @@ def load_historical_data_from_csv(ticker):
         st.error(f"❌ Error cargando {ticker} desde CSV: {str(e)}")
         return pd.DataFrame()
 
-def get_fmp_data(ticker, days=35):
-    """Obtiene datos recientes de FMP"""
+def get_fmp_data(ticker, days=365*5): # Descargar más datos históricos por defecto
+    """Obtiene datos históricos completos de FMP"""
     try:
         api_key = get_available_fmp_key()
-        url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?timeseries={days}&apikey={api_key}"
+        # Usar el endpoint para datos históricos completos
+        url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?apikey={api_key}"
         # Añadir delay para respetar límites
         time.sleep(2)
-        response = requests.get(url, timeout=30)
+        response = requests.get(url, timeout=60) # Timeout más largo para datos grandes
         FMP_CALLS[api_key] += 1
         if response.status_code == 200:
             data = response.json()
-            if 'historical' in data:
+            if 'historical' in data and data['historical']:
                 df = pd.DataFrame(data['historical'])
                 df['date'] = pd.to_datetime(df['date'])
                 df = df.set_index('date')
                 df = df[['close']].rename(columns={'close': ticker})
                 df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
-                st.write(f"✅ {ticker} datos recientes de FMP - {len(df)} registros")
+                st.write(f"✅ {ticker} datos históricos completos de FMP - {len(df)} registros")
                 return df
-        st.warning(f"⚠️ No se pudieron obtener datos de FMP para {ticker}")
-        return pd.DataFrame()
+            else:
+                st.warning(f"⚠️ Datos vacíos de FMP para {ticker}")
+                return pd.DataFrame()
+        else:
+            st.warning(f"⚠️ Error HTTP {response.status_code} obteniendo datos de FMP para {ticker}")
+            return pd.DataFrame()
     except Exception as e:
         st.error(f"❌ Error obteniendo datos de FMP para {ticker}: {e}")
         return pd.DataFrame()
 
 def download_ticker_data(ticker, start, end):
-    """Descarga datos combinando CSV histórico + FMP reciente"""
+    """Descarga datos combinando FMP (primero) + CSV (fallback)"""
     # Intentar cargar desde caché primero
     cached_data = load_from_cache(ticker, start, end)
     if cached_data is not None:
         return cached_data
     try:
-        # 1. Cargar datos históricos desde CSV
-        hist_df = load_historical_data_from_csv(ticker)
-        if hist_df.empty:
-            return pd.DataFrame()
+        # 1. Intentar descargar datos completos desde FMP primero
+        st.write(f"🔄 Intentando descargar datos de FMP para {ticker}...")
+        fmp_df = get_fmp_data(ticker, days=365*10) # Intentar obtener muchos años
         
-        # 2. Verificar si se necesitan datos recientes de FMP
-        recent_df = pd.DataFrame() # Inicializar como DataFrame vacío
-        if should_use_fmp(hist_df):
-            st.write(f"🔄 Obteniendo datos recientes de FMP para {ticker}...")
-            recent_df = get_fmp_data(ticker, days=35)
+        if not fmp_df.empty:
+            st.write(f"✅ Datos de FMP obtenidos para {ticker}")
+            # Filtrar por rango de fechas
+            fmp_df_filtered = fmp_df[(fmp_df.index >= pd.Timestamp(start)) & 
+                                   (fmp_df.index <= pd.Timestamp(end))]
+            if not fmp_df_filtered.empty:
+                # Convertir a datos mensuales
+                monthly_df = fmp_df_filtered.resample('ME').last()
+                save_to_cache(ticker, start, end, monthly_df)
+                return monthly_df
+            else:
+                st.warning(f"⚠️ Datos de FMP para {ticker} fuera del rango de fechas")
         else:
-            st.write(f"✅ Datos CSV de {ticker} son recientes, no se necesita FMP.")
-        
-        # 3. Combinar datos
-        if not recent_df.empty:
-            # Concatenar y eliminar duplicados
-            combined_df = pd.concat([hist_df, recent_df])
-            combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
-            combined_df = combined_df.sort_index()
-        else:
-            combined_df = hist_df
+            st.warning(f"⚠️ No se pudieron obtener datos de FMP para {ticker}")
             
-        # 4. Filtrar por rango de fechas
-        combined_df = combined_df[(combined_df.index >= pd.Timestamp(start)) & 
-                                 (combined_df.index <= pd.Timestamp(end))]
-        
-        # 5. Convertir a datos mensuales
-        if not combined_df.empty:
-            monthly_df = combined_df.resample('ME').last()
-            save_to_cache(ticker, start, end, monthly_df)
-            return monthly_df
+        # 2. Si FMP falla, cargar datos históricos desde CSV
+        st.write(f"🔄 Cargando datos de CSV como fallback para {ticker}...")
+        csv_df = load_historical_data_from_csv(ticker)
+        if not csv_df.empty:
+            # Obtener datos recientes de FMP si es necesario
+            recent_df = pd.DataFrame() # Inicializar como DataFrame vacío
+            if should_use_fmp(csv_df):
+                st.write(f"🔄 Obteniendo datos recientes de FMP para {ticker}...")
+                recent_df = get_fmp_data(ticker, days=35)
+            else:
+                st.write(f"✅ Datos CSV de {ticker} son recientes, no se necesita FMP adicional.")
+            
+            # Combinar datos
+            if not recent_df.empty:
+                # Concatenar y eliminar duplicados
+                combined_df = pd.concat([csv_df, recent_df])
+                combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
+                combined_df = combined_df.sort_index()
+            else:
+                combined_df = csv_df
+                
+            # Filtrar por rango de fechas
+            combined_df = combined_df[(combined_df.index >= pd.Timestamp(start)) & 
+                                    (combined_df.index <= pd.Timestamp(end))]
+            
+            # Convertir a datos mensuales
+            if not combined_df.empty:
+                monthly_df = combined_df.resample('ME').last()
+                save_to_cache(ticker, start, end, monthly_df)
+                return monthly_df
+            else:
+                st.warning(f"⚠️ No hay datos disponibles en el rango para {ticker} (desde CSV)")
+        else:
+            st.error(f"❌ No se pudieron cargar datos de CSV para {ticker}")
+            
     except Exception as e:
         st.error(f"❌ Error procesando {ticker}: {e}")
+        # Intentar devolver datos de CSV como último recurso
+        try:
+            csv_df = load_historical_data_from_csv(ticker)
+            if not csv_df.empty:
+                csv_df_filtered = csv_df[(csv_df.index >= pd.Timestamp(start)) & 
+                                       (csv_df.index <= pd.Timestamp(end))]
+                if not csv_df_filtered.empty:
+                    monthly_df = csv_df_filtered.resample('ME').last()
+                    return monthly_df
+        except:
+            pass
     return pd.DataFrame()
 
 @st.cache_data(show_spinner=False)
@@ -433,7 +472,7 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}" # Convertir decimal a porcentaje con 3 decimales
              })
-    if not formatted_data:
+    if not formatted_
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
