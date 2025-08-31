@@ -30,7 +30,15 @@ DUAL_ROC4 = {
     "universe":['SPY','IWM','QQQ','VGK','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD','IEF'],
     "fill":    ['IEF','TLT','SHY']
 }
-ALL_STRATEGIES = {"DAA KELLER": DAA_KELLER, "Dual Momentum ROC4": DUAL_ROC4}
+ACCEL_DUAL_MOM = {
+    "equity": ['SPY', 'VGK'],
+    "protective": ['TLT', 'IEF', 'SHY', 'TIP']
+}
+ALL_STRATEGIES = {
+    "DAA KELLER": DAA_KELLER, 
+    "Dual Momentum ROC4": DUAL_ROC4,
+    "Accelerated Dual Momentum": ACCEL_DUAL_MOM
+}
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
 # FMP API Keys
@@ -360,6 +368,27 @@ def momentum_score_roc4(df, symbol):
     except Exception:
         return 0
 
+def momentum_score_accel_dual_mom(df, symbol):
+    """Calcula el ROC promedio de 1, 3 y 6 meses para Accelerated Dual Momentum"""
+    if len(df) < 7: # Necesita al menos 7 meses de datos para calcular ROC_6
+        return 0
+    try:
+        p0 = df[symbol].iloc[-1]
+        p1 = df[symbol].iloc[-2]  # Hace 1 mes
+        p3 = df[symbol].iloc[-4]  # Hace 3 meses
+        p6 = df[symbol].iloc[-7]  # Hace 6 meses
+
+        if p1 <= 0 or p3 <= 0 or p6 <= 0:
+            return 0 # Evitar divisiones por cero o precios negativos
+
+        roc_1 = (p0 / p1) - 1
+        roc_3 = (p0 / p3) - 1
+        roc_6 = (p0 / p6) - 1
+
+        return (roc_1 + roc_3 + roc_6) / 3
+    except Exception:
+        return 0
+
 def calc_metrics(rets):
     rets = rets.dropna()
     if len(rets) < 2: # Necesitamos al menos 2 puntos para calcular métricas
@@ -516,6 +545,113 @@ def weights_roc4(df, universe, fill):
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
+def weights_accel_dual_mom(df, equity, protective):
+    """Calcula señales para Accelerated Dual Momentum"""
+    if len(df) < 7: # Necesitamos al menos 7 meses para calcular todos los ROCs
+        return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+    
+    sig = []
+    # Calcular señales para cada mes disponible (desde el mes 7 en adelante)
+    for i in range(7, len(df)):
+        try:
+            df_subset = df.iloc[:i] # Datos hasta el final del mes i-1
+            
+            # 1. Calcular ROC promedio para activos de renta variable
+            equity_mom = {s: momentum_score_accel_dual_mom(df_subset, s) for s in equity if s in df_subset.columns}
+            
+            # 2. Seleccionar el activo riesgoso con mejor momentum promedio
+            if equity_mom:
+                best_equity = max(equity_mom, key=equity_mom.get)
+                best_equity_mom = equity_mom[best_equity]
+            else:
+                best_equity = None
+                best_equity_mom = 0
+            
+            # 3. Contar cuántos ROC promedios son negativos
+            n = sum(1 for mom in equity_mom.values() if mom <= 0)
+            
+            w = {}
+            # 4. Aplicar reglas de asignación
+            if n == 2 and best_equity_mom <= 0:
+                # Ambos activos de renta variable tienen momentum negativo
+                # Seleccionar activo defensivo con mejor ROC(1)
+                protective_mom = {}
+                for s in protective:
+                    if s in df_subset.columns:
+                        try:
+                            # Calcular ROC(1) para activos protectivos
+                            p0_prot = df_subset[s].iloc[-1]
+                            p1_prot = df_subset[s].iloc[-2] # Hace 1 mes
+                            if p1_prot > 0:
+                                protective_mom[s] = (p0_prot / p1_prot) - 1
+                        except:
+                            protective_mom[s] = float('-inf') # Penalizar si hay error
+                
+                if protective_mom:
+                    # Encontrar el activo protectivo con el mejor ROC(1)
+                    best_protective = max(protective_mom, key=protective_mom.get)
+                    if protective_mom[best_protective] != float('-inf'):
+                        w = {best_protective: 1.0}
+                    else:
+                        # Si todos los protectivos dan error, mantenerse en efectivo (peso 0)
+                        pass
+                # Si no hay protectivos disponibles, mantenerse en efectivo (peso 0)
+            else:
+                # n=0 o n=1: Invertir en el mejor activo riesgoso
+                if best_equity:
+                    w = {best_equity: 1.0}
+                # Si no hay activos riesgosos disponibles, mantenerse en efectivo (peso 0)
+            
+            # Añadir la señal calculada para el inicio del mes i
+            sig.append((df.index[i], w))
+        except Exception as e:
+            # En caso de error, añadir señal vacía para esta fecha
+            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
+
+    # Añadir señal para el último mes disponible (si hay suficientes datos)
+    if len(df) >= 7:
+        try:
+            df_subset = df # Todos los datos disponibles
+            equity_mom = {s: momentum_score_accel_dual_mom(df_subset, s) for s in equity if s in df_subset.columns}
+            
+            if equity_mom:
+                best_equity = max(equity_mom, key=equity_mom.get)
+                best_equity_mom = equity_mom[best_equity]
+            else:
+                best_equity = None
+                best_equity_mom = 0
+            
+            n = sum(1 for mom in equity_mom.values() if mom <= 0)
+            
+            w = {}
+            if n == 2 and best_equity_mom <= 0:
+                protective_mom = {}
+                for s in protective:
+                    if s in df_subset.columns:
+                        try:
+                            p0_prot = df_subset[s].iloc[-1]
+                            p1_prot = df_subset[s].iloc[-2]
+                            if p1_prot > 0:
+                                protective_mom[s] = (p0_prot / p1_prot) - 1
+                        except:
+                            protective_mom[s] = float('-inf')
+                
+                if protective_mom:
+                    best_protective = max(protective_mom, key=protective_mom.get)
+                    if protective_mom[best_protective] != float('-inf'):
+                        w = {best_protective: 1.0}
+            else:
+                if best_equity:
+                    w = {best_equity: 1.0}
+            
+            sig.append((df.index[-1], w))
+        except Exception as e:
+            sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
+    
+    # Eliminar duplicados por fecha manteniendo el último (más reciente)
+    sig = list({s[0]: s for s in sig}.values())
+    return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+
 # ------------- FUNCIONES AUXILIARES PARA SEÑALES -------------
 def format_signal_for_display(signal_dict):
     """Formatea un diccionario de señal para mostrarlo como tabla"""
@@ -529,7 +665,7 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}" # Convertir decimal a porcentaje con 3 decimales
              })
-    if not formatted_data:
+    if not formatted_
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
@@ -543,7 +679,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         all_tickers_needed = set()
         for s in active:
             strategy = ALL_STRATEGIES[s]
-            for key in ["risky", "protect", "canary", "universe", "fill"]:
+            for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective"]:
                 if key in strategy:
                     all_tickers_needed.update(strategy[key])
         all_tickers_needed.add("SPY")  # Siempre necesitamos SPY para benchmark
@@ -593,7 +729,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_last = weights_daa(df_up_to_last_month_end, **ALL_STRATEGIES[s])
                     # Señal HIPOTÉTICA: usando todos los datos
                     sig_current = weights_daa(df_full, **ALL_STRATEGIES[s])
-                else:  # DUAL_ROC4
+                elif s == "Dual Momentum ROC4":
                     # Señal REAL: usando datos hasta el final del mes anterior
                     sig_last = weights_roc4(df_up_to_last_month_end, 
                                           ALL_STRATEGIES[s]["universe"],
@@ -602,6 +738,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_current = weights_roc4(df_full,
                                              ALL_STRATEGIES[s]["universe"],
                                              ALL_STRATEGIES[s]["fill"])
+                elif s == "Accelerated Dual Momentum":
+                    # Señal REAL: usando datos hasta el final del mes anterior
+                    sig_last = weights_accel_dual_mom(df_up_to_last_month_end,
+                                                    ALL_STRATEGIES[s]["equity"],
+                                                    ALL_STRATEGIES[s]["protective"])
+                    # Señal HIPOTÉTICA: usando todos los datos
+                    sig_current = weights_accel_dual_mom(df_full,
+                                                       ALL_STRATEGIES[s]["equity"],
+                                                       ALL_STRATEGIES[s]["protective"])
                 # Guardar la última señal de cada tipo
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]  # (fecha, pesos_dict)
@@ -662,10 +807,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             for s in active:
                 if s == "DAA KELLER":
                     strategy_signals[s] = weights_daa(df_filtered, **ALL_STRATEGIES[s])
-                else: # DUAL_ROC4
+                elif s == "Dual Momentum ROC4":
                     strategy_signals[s] = weights_roc4(df_filtered,
                                                     ALL_STRATEGIES[s]["universe"],
                                                     ALL_STRATEGIES[s]["fill"])
+                elif s == "Accelerated Dual Momentum":
+                    strategy_signals[s] = weights_accel_dual_mom(df_filtered,
+                                                               ALL_STRATEGIES[s]["equity"],
+                                                               ALL_STRATEGIES[s]["protective"])
 
             # 2. Preparar estructura para la cartera combinada
             # Las fechas de rebalanceo son las fechas de las señales
@@ -798,10 +947,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                  # Calcular señales para la estrategia individual
                  if s == "DAA KELLER":
                      sig_list = weights_daa(df_filtered, **ALL_STRATEGIES[s])
-                 else: # DUAL_ROC4
+                 elif s == "Dual Momentum ROC4":
                      sig_list = weights_roc4(df_filtered,
                                              ALL_STRATEGIES[s]["universe"],
                                              ALL_STRATEGIES[s]["fill"])
+                 elif s == "Accelerated Dual Momentum":
+                     sig_list = weights_accel_dual_mom(df_filtered,
+                                                     ALL_STRATEGIES[s]["equity"],
+                                                     ALL_STRATEGIES[s]["protective"])
 
                  # Extraer fechas de rebalanceo y señales para esta estrategia
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
@@ -997,4 +1150,3 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.error(f"❌ Error en pestaña {s}: {e}")
 else:
     st.info("👈 Configura y ejecuta")
-
