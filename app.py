@@ -83,6 +83,17 @@ def get_available_fmp_key():
     return min(FMP_KEYS, key=lambda k: FMP_CALLS[k])
 
 # ------------- DESCARGA (Solo CSV desde GitHub + FMP) -------------
+def should_use_fmp(csv_df, days_threshold=7):
+    """Verifica si es necesario usar FMP basado en la frescura de los datos CSV"""
+    if csv_df.empty:
+        return True
+    last_csv_date = csv_df.index.max()
+    today = pd.Timestamp.now().normalize()
+    # Si la diferencia es menor que X días, no necesitas FMP
+    if (today - last_csv_date).days < days_threshold:
+        return False
+    return True
+
 def load_historical_data_from_csv(ticker):
     """Carga datos históricos desde CSV en GitHub"""
     try:
@@ -175,8 +186,15 @@ def download_ticker_data(ticker, start, end):
         hist_df = load_historical_data_from_csv(ticker)
         if hist_df.empty:
             return pd.DataFrame()
-        # 2. Obtener datos recientes de FMP (últimos 35 días)
-        recent_df = get_fmp_data(ticker, days=35)
+        
+        # 2. Verificar si se necesitan datos recientes de FMP
+        recent_df = pd.DataFrame() # Inicializar como DataFrame vacío
+        if should_use_fmp(hist_df):
+            st.write(f"🔄 Obteniendo datos recientes de FMP para {ticker}...")
+            recent_df = get_fmp_data(ticker, days=35)
+        else:
+            st.write(f"✅ Datos CSV de {ticker} son recientes, no se necesita FMP.")
+        
         # 3. Combinar datos
         if not recent_df.empty:
             # Concatenar y eliminar duplicados
@@ -185,9 +203,11 @@ def download_ticker_data(ticker, start, end):
             combined_df = combined_df.sort_index()
         else:
             combined_df = hist_df
+            
         # 4. Filtrar por rango de fechas
         combined_df = combined_df[(combined_df.index >= pd.Timestamp(start)) & 
                                  (combined_df.index <= pd.Timestamp(end))]
+        
         # 5. Convertir a datos mensuales
         if not combined_df.empty:
             monthly_df = combined_df.resample('ME').last()
@@ -300,8 +320,9 @@ def weights_daa(df, risky, protect, canary):
     """Calcula señales para DAA Keller - LÓGICA CORREGIDA"""
     if len(df) < 13:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+    
     sig = []
-    # Calcular señales para cada mes disponible (desde el mes 13 en adelante)
+    # Calcular señal para cada mes disponible (desde el mes 13 en adelante)
     # La señal para el mes 'i' se calcula usando datos hasta el final del mes 'i-1'
     for i in range(13, len(df)):  # Comenzar desde el índice 13, pero no incluir el último mes para la señal
         try:
@@ -362,6 +383,8 @@ def weights_daa(df, risky, protect, canary):
         except Exception as e:
             sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
             
+    # Eliminar duplicados por fecha manteniendo el último (más reciente)
+    sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_roc4(df, universe, fill):
@@ -392,6 +415,9 @@ def weights_roc4(df, universe, fill):
         except Exception as e:
             # En caso de error, añadir señal vacía para esta fecha
             sig.append((df.index[i-1] if i <= len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
+    
+    # Eliminar duplicados por fecha manteniendo el último (más reciente)
+    sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 # ------------- FUNCIONES AUXILIARES PARA SEÑALES -------------
@@ -401,11 +427,6 @@ def format_signal_for_display(signal_dict):
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     formatted_data = []
     for ticker, weight in signal_dict.items():
-        # if weight > 0: # Solo mostrar tickers con peso
-        #     formatted_data.append({
-        #         "Ticker": ticker,
-        #         "Peso (%)": f"{weight * 100:.2f}"
-        #     })
         # Mostrar siempre que el peso no sea cero
         if weight != 0: 
              formatted_data.append({
