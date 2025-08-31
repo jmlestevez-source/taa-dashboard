@@ -21,28 +21,41 @@ initial_capital = st.sidebar.number_input("💰 Capital Inicial ($)", 1000, 10_0
 start_date = st.sidebar.date_input("Fecha de inicio", datetime(2015, 1, 1))
 end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today())
 
+# Actualización: VGK -> IEV en todas las estrategias
 DAA_KELLER = {
-    "risky":   ['SPY','IWM','QQQ','IEV','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD'],
+    "risky":   ['SPY','IWM','QQQ','IEV','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD'], # VGK -> IEV
     "protect": ['SHY','IEF','LQD'],
     "canary":  ['EEM','AGG']
 }
 DUAL_ROC4 = {
-    "universe":['SPY','IWM','QQQ','IEV','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD','IEF'],
+    "universe":['SPY','IWM','QQQ','IEV','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD','IEF'], # VGK -> IEV
     "fill":    ['IEF','TLT','SHY']
 }
 ACCEL_DUAL_MOM = {
-    "equity": ['SPY', 'IEV'],
+    "equity": ['SPY', 'IEV'], # VGK -> IEV
     "protective": ['TLT', 'IEF', 'SHY', 'TIP']
 }
 VAA_12 = {
-    "risky": ['SPY', 'IWM', 'QQQ', 'IEV', 'EWJ', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'LQD', 'HYG'],
+    "risky": ['SPY', 'IWM', 'QQQ', 'IEV', 'EWJ', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'LQD', 'HYG'], # VGK -> IEV
     "safe": ['IEF', 'LQD', 'BIL']
 }
+# Nueva estrategia
+COMPOSITE_DUAL_MOM = {
+    "slices": {
+        "Equities": ['SPY', 'EFA'],
+        "Bonds": ['HYG', 'LQD'],
+        "Real_Estate": ['VNQ', 'IYR'],
+        "Stress": ['GLD', 'TLT']
+    },
+    "benchmark": 'BIL' # Activo de referencia para comparar rendimiento mínimo
+}
+
 ALL_STRATEGIES = {
     "DAA KELLER": DAA_KELLER, 
     "Dual Momentum ROC4": DUAL_ROC4,
     "Accelerated Dual Momentum": ACCEL_DUAL_MOM,
-    "VAA-12": VAA_12
+    "VAA-12": VAA_12,
+    "Composite Dual Momentum": COMPOSITE_DUAL_MOM
 }
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
@@ -393,6 +406,21 @@ def momentum_score_accel_dual_mom(df, symbol):
         return (roc_1 + roc_3 + roc_6) / 3
     except Exception:
         return 0
+
+def roc_12(df, symbol):
+    """Calcula el retorno de 12 meses para Composite Dual Momentum"""
+    if len(df) < 13: # Necesita al menos 13 meses de datos (hoy y hace 12 meses)
+        return float('-inf') # Penalizar por no tener suficientes datos
+    try:
+        p0 = df[symbol].iloc[-1]       # Precio hoy
+        p12 = df[symbol].iloc[-13]     # Precio hace 12 meses (12 filas atrás)
+        
+        if p12 <= 0:
+            return float('-inf') # Penalizar divisiones por cero o precios negativos
+        
+        return (p0 / p12) - 1
+    except Exception:
+        return float('-inf') # Penalizar errores
 
 def calc_metrics(rets):
     rets = rets.dropna()
@@ -750,6 +778,86 @@ def weights_vaa_12(df, risky, safe):
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
+def weights_composite_dual_mom(df, slices, benchmark):
+    """Calcula señales para Composite Dual Momentum"""
+    # Necesita al menos 13 meses de datos para calcular ROC_12
+    if len(df) < 13:
+        return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+    
+    sig = []
+    # Calcular señales para cada mes disponible (desde el mes 13 en adelante)
+    for i in range(13, len(df)):
+        try:
+            df_subset = df.iloc[:i] # Datos hasta el final del mes i-1
+            
+            # 1. Calcular ROC_12 para el benchmark BIL
+            benchmark_roc = roc_12(df_subset, benchmark)
+            
+            # 2. Inicializar pesos de la cartera
+            w = {}
+            
+            # 3. Iterar por cada rebanada
+            for slice_name, assets in slices.items():
+                if len(assets) == 2:
+                    asset1, asset2 = assets
+                    
+                    # Verificar que ambos activos estén en el DataFrame
+                    if asset1 in df_subset.columns and asset2 in df_subset.columns:
+                        # Calcular ROC_12 para ambos activos de la rebanada
+                        roc1 = roc_12(df_subset, asset1)
+                        roc2 = roc_12(df_subset, asset2)
+                        
+                        # Seleccionar el activo con el mejor ROC_12
+                        if roc1 >= roc2:
+                            selected_asset = asset1
+                            selected_roc = roc1
+                        else:
+                            selected_asset = asset2
+                            selected_roc = roc2
+                        
+                        # Condición: solo invertir si el ROC_12 seleccionado es mayor que el de BIL
+                        if selected_roc > benchmark_roc:
+                            # Asignar 25% (0.25) a ese activo
+                            w[selected_asset] = 0.25
+                        # Si no se cumple la condición, no se asigna peso (efectivo/0% para esta rebanada)
+                    # Si uno de los activos no está disponible, se podría manejar de otra forma,
+                    # pero por ahora simplemente no se asigna peso a esta rebanada.
+                # Si la rebanada no tiene exactamente 2 activos, se ignora o se maneja como error.
+            
+            # 4. Añadir la señal calculada para el inicio del mes i
+            sig.append((df.index[i], w))
+        except Exception as e:
+            # En caso de error, añadir señal vacía para esta fecha
+            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
+
+    # Añadir señal para el último mes disponible (si hay suficientes datos)
+    if len(df) >= 13:
+        try:
+            df_subset = df # Todos los datos disponibles
+            benchmark_roc = roc_12(df_subset, benchmark)
+            w = {}
+            for slice_name, assets in slices.items():
+                if len(assets) == 2:
+                    asset1, asset2 = assets
+                    if asset1 in df_subset.columns and asset2 in df_subset.columns:
+                        roc1 = roc_12(df_subset, asset1)
+                        roc2 = roc_12(df_subset, asset2)
+                        if roc1 >= roc2:
+                            selected_asset = asset1
+                            selected_roc = roc1
+                        else:
+                            selected_asset = asset2
+                            selected_roc = roc2
+                        if selected_roc > benchmark_roc:
+                            w[selected_asset] = 0.25
+            sig.append((df.index[-1], w))
+        except Exception as e:
+            sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
+    
+    # Eliminar duplicados por fecha manteniendo el último (más reciente)
+    sig = list({s[0]: s for s in sig}.values())
+    return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+
 # ------------- FUNCIONES AUXILIARES PARA SEÑALES -------------
 def format_signal_for_display(signal_dict):
     """Formatea un diccionario de señal para mostrarlo como tabla"""
@@ -777,9 +885,18 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         all_tickers_needed = set()
         for s in active:
             strategy = ALL_STRATEGIES[s]
-            for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective", "safe"]:
-                if key in strategy:
-                    all_tickers_needed.update(strategy[key])
+            # Actualización para manejar la nueva estructura de COMPOSITE_DUAL_MOM
+            if s == "Composite Dual Momentum":
+                # Añadir activos de las rebanadas
+                for assets in strategy["slices"].values():
+                    all_tickers_needed.update(assets)
+                # Añadir el benchmark
+                all_tickers_needed.add(strategy["benchmark"])
+            else:
+                # Lógica existente para otras estrategias
+                for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective", "safe"]:
+                    if key in strategy:
+                        all_tickers_needed.update(strategy[key])
         all_tickers_needed.add("SPY")  # Siempre necesitamos SPY para benchmark
         tickers = list(all_tickers_needed)
         st.write(f"📊 Tickers a procesar: {tickers}")
@@ -854,6 +971,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_current = weights_vaa_12(df_full,
                                                ALL_STRATEGIES[s]["risky"],
                                                ALL_STRATEGIES[s]["safe"])
+                elif s == "Composite Dual Momentum":
+                    # Señal REAL: usando datos hasta el final del mes anterior
+                    sig_last = weights_composite_dual_mom(df_up_to_last_month_end,
+                                                        ALL_STRATEGIES[s]["slices"],
+                                                        ALL_STRATEGIES[s]["benchmark"])
+                    # Señal HIPOTÉTICA: usando todos los datos
+                    sig_current = weights_composite_dual_mom(df_full,
+                                                           ALL_STRATEGIES[s]["slices"],
+                                                           ALL_STRATEGIES[s]["benchmark"])
                 # Guardar la última señal de cada tipo
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]  # (fecha, pesos_dict)
@@ -905,7 +1031,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.markdown("---")
             
             # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
-            if len(df_filtered) < 13:  # Necesitamos al menos 13 meses para DAA Keller
+            if len(df_filtered) < 13:  # Necesitamos al menos 13 meses para las estrategias que lo requieren
                 st.error("❌ No hay suficientes datos en el rango filtrado.")
                 st.stop()
 
@@ -926,6 +1052,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     strategy_signals[s] = weights_vaa_12(df_filtered,
                                                        ALL_STRATEGIES[s]["risky"],
                                                        ALL_STRATEGIES[s]["safe"])
+                elif s == "Composite Dual Momentum":
+                    strategy_signals[s] = weights_composite_dual_mom(df_filtered,
+                                                                   ALL_STRATEGIES[s]["slices"],
+                                                                   ALL_STRATEGIES[s]["benchmark"])
 
             # 2. Preparar estructura para la cartera combinada
             # Las fechas de rebalanceo son las fechas de las señales
@@ -1070,6 +1200,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      sig_list = weights_vaa_12(df_filtered,
                                              ALL_STRATEGIES[s]["risky"],
                                              ALL_STRATEGIES[s]["safe"])
+                 elif s == "Composite Dual Momentum":
+                     sig_list = weights_composite_dual_mom(df_filtered,
+                                                         ALL_STRATEGIES[s]["slices"],
+                                                         ALL_STRATEGIES[s]["benchmark"])
 
                  # Extraer fechas de rebalanceo y señales para esta estrategia
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
