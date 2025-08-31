@@ -150,7 +150,7 @@ def load_historical_data_from_csv(ticker):
         st.error(f"❌ Error cargando {ticker} desde CSV: {str(e)}")
         return pd.DataFrame()
 
-def get_fmp_data(ticker, days=365*5): # Descargar más datos históricos por defecto
+def get_fmp_data(ticker, days=365*10): # Descargar más datos históricos por defecto
     """Obtiene datos históricos completos de FMP"""
     try:
         api_key = get_available_fmp_key()
@@ -181,7 +181,7 @@ def get_fmp_data(ticker, days=365*5): # Descargar más datos históricos por def
         return pd.DataFrame()
 
 def download_ticker_data(ticker, start, end):
-    """Descarga datos combinando FMP (primero) + CSV (fallback)"""
+    """Descarga datos combinando FMP (primero) + CSV (fallback) + datos históricos CSV adicionales"""
     # Intentar cargar desde caché primero
     cached_data = load_from_cache(ticker, start, end)
     if cached_data is not None:
@@ -206,7 +206,7 @@ def download_ticker_data(ticker, start, end):
         else:
             st.warning(f"⚠️ No se pudieron obtener datos de FMP para {ticker}")
             
-        # 2. Si FMP falla, cargar datos históricos desde CSV
+        # 2. Si FMP falla o no tiene datos suficientes, cargar datos históricos desde CSV
         st.write(f"🔄 Cargando datos de CSV como fallback para {ticker}...")
         csv_df = load_historical_data_from_csv(ticker)
         if not csv_df.empty:
@@ -218,7 +218,7 @@ def download_ticker_data(ticker, start, end):
             else:
                 st.write(f"✅ Datos CSV de {ticker} son recientes, no se necesita FMP adicional.")
             
-            # Combinar datos
+            # Combinar datos FMP recientes con CSV
             if not recent_df.empty:
                 # Concatenar y eliminar duplicados
                 combined_df = pd.concat([csv_df, recent_df])
@@ -472,10 +472,8 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}" # Convertir decimal a porcentaje con 3 decimales
              })
-    # --- CORRECCIÓN AQUÍ ---
     if not formatted_data:
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
-    # ---------------------
     return pd.DataFrame(formatted_data)
 
 # ------------- MAIN -------------
