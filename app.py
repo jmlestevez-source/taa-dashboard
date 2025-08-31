@@ -54,6 +54,12 @@ QUINT_SWITCHING_FILTERED = {
     "risky": ['SPY', 'QQQ', 'EFA', 'EEM', 'TLT'],
     "defensive": ['IEF', 'BIL']
 }
+# Nueva estrategia
+BAA_AGGRESSIVE = {
+    "offensive": ['QQQ', 'EEM', 'EFA', 'AGG'],
+    "defensive": ['TIP', 'DBC', 'BIL', 'IEF', 'TLT', 'LQD', 'AGG'],
+    "canary": ['SPY', 'EEM', 'EFA', 'AGG']
+}
 
 ALL_STRATEGIES = {
     "DAA KELLER": DAA_KELLER, 
@@ -61,7 +67,8 @@ ALL_STRATEGIES = {
     "Accelerated Dual Momentum": ACCEL_DUAL_MOM,
     "VAA-12": VAA_12,
     "Composite Dual Momentum": COMPOSITE_DUAL_MOM,
-    "Quint Switching Filtered": QUINT_SWITCHING_FILTERED
+    "Quint Switching Filtered": QUINT_SWITCHING_FILTERED,
+    "BAA Aggressive": BAA_AGGRESSIVE
 }
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
@@ -442,6 +449,42 @@ def roc_3(df, symbol):
         return (p0 / p3) - 1
     except Exception:
         return float('-inf') # Penalizar errores
+
+def sma_12(df, symbol):
+    """Calcula la media móvil simple de 12 meses para BAA Aggressive"""
+    if len(df) < 12:
+        return 0 # O float('nan') si prefieres manejarlo como tal
+    try:
+        # Tomar los últimos 12 meses de precios de cierre
+        prices = df[symbol].iloc[-12:]
+        if prices.isnull().any() or (prices <= 0).any():
+            return 0
+        return prices.mean()
+    except Exception:
+        return 0
+
+def momentum_score_13612w(df, symbol):
+    """Calcula el momentum score 13612W para BAA Aggressive"""
+    if len(df) < 13: # Necesita al menos 13 meses de datos (hoy y hace 12 meses)
+        return 0 # Penalizar por no tener suficientes datos
+    try:
+        p0 = df[symbol].iloc[-1]  # Precio hoy
+        p1 = df[symbol].iloc[-2]  # Precio hace 1 mes
+        p3 = df[symbol].iloc[-4]  # Precio hace 3 meses
+        p6 = df[symbol].iloc[-7]  # Precio hace 6 meses
+        p12 = df[symbol].iloc[-13] # Precio hace 12 meses
+
+        if p1 <= 0 or p3 <= 0 or p6 <= 0 or p12 <= 0:
+            return 0 # Evitar divisiones por cero o precios negativos
+
+        roc_1 = (p0 / p1) - 1
+        roc_3 = (p0 / p3) - 1
+        roc_6 = (p0 / p6) - 1
+        roc_12 = (p0 / p12) - 1
+
+        return 12 * roc_1 + 4 * roc_3 + 2 * roc_6 + 1 * roc_12
+    except Exception:
+        return 0 # Penalizar errores
 
 def calc_metrics(rets):
     rets = rets.dropna()
@@ -943,6 +986,118 @@ def weights_quint_switching_filtered(df, risky, defensive):
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
+def weights_baa_aggressive(df, offensive, defensive, canary):
+    """Calcula señales para BAA Aggressive"""
+    # Necesita al menos 13 meses de datos para calcular momentum y SMA
+    if len(df) < 13:
+        return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+    
+    sig = []
+    # Calcular señales para cada mes disponible (desde el mes 13 en adelante)
+    for i in range(13, len(df)):
+        try:
+            df_subset = df.iloc[:i] # Datos hasta el final del mes i-1
+            
+            # Etapa 1: Evaluar Canarios
+            canary_mom = {s: momentum_score_13612w(df_subset, s) for s in canary if s in df_subset.columns}
+            
+            # Etapa 2: Decidir entre Ofensivo/Defensivo
+            any_canary_negative = any(mom <= 0 for mom in canary_mom.values())
+            
+            w = {}
+            if any_canary_negative:
+                # Etapa 3b: Asignación Defensiva
+                # Calcular SMA12 para defensivos
+                defensive_sma = {s: sma_12(df_subset, s) for s in defensive if s in df_subset.columns}
+                # Seleccionar top 3 defensivos por SMA12
+                top_3_def = sorted(defensive_sma, key=defensive_sma.get, reverse=True)[:3]
+                
+                if len(top_3_def) == 3:
+                    # Calcular SMA12 para BIL
+                    sma_bil = sma_12(df_subset, 'BIL') if 'BIL' in df_subset.columns else 0
+                    
+                    selected_assets = []
+                    for asset in top_3_def:
+                        # Calcular Relative Strength vs SMA12 para el activo defensivo
+                        price_asset = df_subset[asset].iloc[-1]
+                        sma_asset = defensive_sma[asset]
+                        rs_asset = (price_asset / sma_asset) - 1 if sma_asset > 0 and price_asset > 0 else float('-inf')
+                        
+                        # Calcular Relative Strength vs SMA12 para BIL
+                        price_bil = df_subset['BIL'].iloc[-1] if 'BIL' in df_subset.columns else 0
+                        rs_bil = (price_bil / sma_bil) - 1 if sma_bil > 0 and price_bil > 0 else float('-inf')
+                        
+                        # Comparar y decidir
+                        if rs_asset > rs_bil:
+                            selected_assets.append(asset)
+                        else:
+                            # Reemplazar por BIL
+                            selected_assets.append('BIL')
+                    
+                    # Asignar 33.33% a cada uno de los 3 seleccionados (incluyendo posibles BILs)
+                    for asset in selected_assets:
+                        # Manejar posibles duplicados (varios 'BIL') sumando pesos
+                        w[asset] = w.get(asset, 0) + 1/3 
+                # Si no hay 3 defensivos disponibles, la cartera queda vacía o ponderada con los que haya.
+                
+            else:
+                # Etapa 3a: Asignación Ofensiva
+                # Calcular SMA12 para ofensivos
+                offensive_sma = {s: sma_12(df_subset, s) for s in offensive if s in df_subset.columns}
+                # Seleccionar el mejor ofensivo por SMA12
+                if offensive_sma:
+                    best_offensive = max(offensive_sma, key=offensive_sma.get)
+                    w = {best_offensive: 1.0}
+            
+            # Añadir la señal calculada para el inicio del mes i
+            sig.append((df.index[i], w))
+        except Exception as e:
+            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
+
+    # Añadir señal para el último mes disponible (si hay suficientes datos)
+    if len(df) >= 13:
+        try:
+            df_subset = df # Todos los datos disponibles
+            canary_mom = {s: momentum_score_13612w(df_subset, s) for s in canary if s in df_subset.columns}
+            any_canary_negative = any(mom <= 0 for mom in canary_mom.values())
+            
+            w = {}
+            if any_canary_negative:
+                defensive_sma = {s: sma_12(df_subset, s) for s in defensive if s in df_subset.columns}
+                top_3_def = sorted(defensive_sma, key=defensive_sma.get, reverse=True)[:3]
+                
+                if len(top_3_def) == 3:
+                    sma_bil = sma_12(df_subset, 'BIL') if 'BIL' in df_subset.columns else 0
+                    selected_assets = []
+                    for asset in top_3_def:
+                        price_asset = df_subset[asset].iloc[-1]
+                        sma_asset = defensive_sma[asset]
+                        rs_asset = (price_asset / sma_asset) - 1 if sma_asset > 0 and price_asset > 0 else float('-inf')
+                        
+                        price_bil = df_subset['BIL'].iloc[-1] if 'BIL' in df_subset.columns else 0
+                        rs_bil = (price_bil / sma_bil) - 1 if sma_bil > 0 and price_bil > 0 else float('-inf')
+                        
+                        if rs_asset > rs_bil:
+                            selected_assets.append(asset)
+                        else:
+                            selected_assets.append('BIL')
+                    
+                    for asset in selected_assets:
+                        w[asset] = w.get(asset, 0) + 1/3 
+            else:
+                offensive_sma = {s: sma_12(df_subset, s) for s in offensive if s in df_subset.columns}
+                if offensive_sma:
+                    best_offensive = max(offensive_sma, key=offensive_sma.get)
+                    w = {best_offensive: 1.0}
+            
+            sig.append((df.index[-1], w))
+        except Exception as e:
+            sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
+    
+    # Eliminar duplicados por fecha manteniendo el último (más reciente)
+    sig = list({s[0]: s for s in sig}.values())
+    return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+
 # ------------- FUNCIONES AUXILIARES PARA SEÑALES -------------
 def format_signal_for_display(signal_dict):
     """Formatea un diccionario de señal para mostrarlo como tabla"""
@@ -970,7 +1125,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         all_tickers_needed = set()
         for s in active:
             strategy = ALL_STRATEGIES[s]
-            # Actualización para manejar la nueva estructura de COMPOSITE_DUAL_MOM y QUINT_SWITCHING_FILTERED
+            # Actualización para manejar la nueva estructura de COMPOSITE_DUAL_MOM, QUINT_SWITCHING_FILTERED y BAA_AGGRESSIVE
             if s == "Composite Dual Momentum":
                 # Añadir activos de las rebanadas
                 for assets in strategy["slices"].values():
@@ -981,6 +1136,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 # Añadir activos de riesgo y defensivos
                 all_tickers_needed.update(strategy["risky"])
                 all_tickers_needed.update(strategy["defensive"])
+            elif s == "BAA Aggressive":
+                # Añadir activos ofensivos, defensivos y canarios
+                all_tickers_needed.update(strategy["offensive"])
+                all_tickers_needed.update(strategy["defensive"])
+                all_tickers_needed.update(strategy["canary"])
             else:
                 # Lógica existente para otras estrategias
                 for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective", "safe"]:
@@ -1078,6 +1238,17 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_current = weights_quint_switching_filtered(df_full,
                                                                  ALL_STRATEGIES[s]["risky"],
                                                                  ALL_STRATEGIES[s]["defensive"])
+                elif s == "BAA Aggressive": # Nueva condición
+                    # Señal REAL: usando datos hasta el final del mes anterior
+                    sig_last = weights_baa_aggressive(df_up_to_last_month_end,
+                                                     ALL_STRATEGIES[s]["offensive"],
+                                                     ALL_STRATEGIES[s]["defensive"],
+                                                     ALL_STRATEGIES[s]["canary"])
+                    # Señal HIPOTÉTICA: usando todos los datos
+                    sig_current = weights_baa_aggressive(df_full,
+                                                       ALL_STRATEGIES[s]["offensive"],
+                                                       ALL_STRATEGIES[s]["defensive"],
+                                                       ALL_STRATEGIES[s]["canary"])
                 # Guardar la última señal de cada tipo
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]  # (fecha, pesos_dict)
@@ -1129,7 +1300,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.markdown("---")
             
             # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
-            if len(df_filtered) < 13:  # Necesitamos al menos 13 meses para las estrategias que lo requieren
+            if len(df_filtered) < 13:  # Necesitamos al menos 13 meses para DAA Keller
                 st.error("❌ No hay suficientes datos en el rango filtrado.")
                 st.stop()
 
@@ -1158,6 +1329,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     strategy_signals[s] = weights_quint_switching_filtered(df_filtered,
                                                                          ALL_STRATEGIES[s]["risky"],
                                                                          ALL_STRATEGIES[s]["defensive"])
+                elif s == "BAA Aggressive": # Nueva condición
+                    strategy_signals[s] = weights_baa_aggressive(df_filtered,
+                                                                ALL_STRATEGIES[s]["offensive"],
+                                                                ALL_STRATEGIES[s]["defensive"],
+                                                                ALL_STRATEGIES[s]["canary"])
 
             # 2. Preparar estructura para la cartera combinada
             # Las fechas de rebalanceo son las fechas de las señales
@@ -1310,6 +1486,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      sig_list = weights_quint_switching_filtered(df_filtered,
                                                                ALL_STRATEGIES[s]["risky"],
                                                                ALL_STRATEGIES[s]["defensive"])
+                 elif s == "BAA Aggressive": # Nueva condición
+                     sig_list = weights_baa_aggressive(df_filtered,
+                                                     ALL_STRATEGIES[s]["offensive"],
+                                                     ALL_STRATEGIES[s]["defensive"],
+                                                     ALL_STRATEGIES[s]["canary"])
 
                  # Extraer fechas de rebalanceo y señales para esta estrategia
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
