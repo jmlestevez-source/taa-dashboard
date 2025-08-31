@@ -880,4 +880,3 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.error(f"❌ Error en pestaña {s}: {e}")
 else:
     st.info("👈 Configura y ejecuta")
-``
