@@ -458,16 +458,18 @@ def weights_daa(df, risky, protect, canary):
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_roc4(df, universe, fill):
-    """Calcula señales para Dual Momentum ROC4"""
+    """Calcula señales para Dual Momentum ROC4 - LÓGICA CORREGIDA"""
     if len(df) < 6:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
     base = 1/6
     # Calcular señales para cada mes disponible (desde el mes 6 en adelante)
-    for i in range(6, len(df) + 1):  # Comenzar desde el índice 6
+    # La señal para el mes 'i' se calcula usando datos hasta el final del mes 'i-1'
+    for i in range(6, len(df)):  # Comenzar desde el índice 6, pero no incluir el último mes para la señal
         try:
-            # Usar datos hasta el mes i
+            # Usar datos hasta el mes i-1 (inclusive) para calcular la señal del mes i
             df_subset = df.iloc[:i]
+            # Calcular momentum scores
             roc = {s: momentum_score_roc4(df_subset, s) for s in universe if s in df_subset.columns}
             fill_roc = {s: momentum_score_roc4(df_subset, s) for s in fill if s in df_subset.columns}
             positive = [s for s, v in roc.items() if v > 0]
@@ -481,11 +483,35 @@ def weights_roc4(df, universe, fill):
                 if best:
                     extra = (6 - n_sel) * base
                     weights[best] = weights.get(best, 0) + extra
-            sig.append((df_subset.index[-1], weights))
+            # La señal calculada en df_subset.index[-1] (último día del mes i-1) 
+            # se aplica durante el mes i (desde df.index[i-1] hasta df.index[i])
+            sig.append((df.index[i], weights)) # La fecha de la señal es la fecha del rebalanceo (inicio del mes i)
         except Exception as e:
             # En caso de error, añadir señal vacía para esta fecha
-            sig.append((df.index[i-1] if i <= len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
+            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
     
+    # Añadir señal para el último mes disponible (si hay suficientes datos)
+    if len(df) >= 6:
+        try:
+            df_subset = df # Usar todos los datos disponibles para la última señal
+            roc = {s: momentum_score_roc4(df_subset, s) for s in universe if s in df_subset.columns}
+            fill_roc = {s: momentum_score_roc4(df_subset, s) for s in fill if s in df_subset.columns}
+            positive = [s for s, v in roc.items() if v > 0]
+            selected = sorted(positive, key=lambda s: roc.get(s, float('-inf')), reverse=True)[:6]
+            n_sel = len(selected)
+            weights = {}
+            for s in selected:
+                weights[s] = base
+            if n_sel < 6 and fill_roc and len(fill_roc) > 0:
+                best = max(fill_roc, key=fill_roc.get) if fill_roc else None
+                if best:
+                    extra = (6 - n_sel) * base
+                    weights[best] = weights.get(best, 0) + extra
+            # Esta señal se aplica desde el último rebalanceo hasta el final del último mes
+            sig.append((df.index[-1], weights))
+        except Exception as e:
+            sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
+            
     # Eliminar duplicados por fecha manteniendo el último (más reciente)
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
@@ -971,3 +997,4 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.error(f"❌ Error en pestaña {s}: {e}")
 else:
     st.info("👈 Configura y ejecuta")
+
