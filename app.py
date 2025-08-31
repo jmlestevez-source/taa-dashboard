@@ -49,13 +49,19 @@ COMPOSITE_DUAL_MOM = {
     },
     "benchmark": 'BIL' # Activo de referencia para comparar rendimiento mínimo
 }
+# Nueva estrategia
+QUINT_SWITCHING_FILTERED = {
+    "risky": ['SPY', 'QQQ', 'EFA', 'EEM', 'TLT'],
+    "defensive": ['IEF', 'BIL']
+}
 
 ALL_STRATEGIES = {
     "DAA KELLER": DAA_KELLER, 
     "Dual Momentum ROC4": DUAL_ROC4,
     "Accelerated Dual Momentum": ACCEL_DUAL_MOM,
     "VAA-12": VAA_12,
-    "Composite Dual Momentum": COMPOSITE_DUAL_MOM
+    "Composite Dual Momentum": COMPOSITE_DUAL_MOM,
+    "Quint Switching Filtered": QUINT_SWITCHING_FILTERED
 }
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
@@ -419,6 +425,21 @@ def roc_12(df, symbol):
             return float('-inf') # Penalizar divisiones por cero o precios negativos
         
         return (p0 / p12) - 1
+    except Exception:
+        return float('-inf') # Penalizar errores
+
+def roc_3(df, symbol):
+    """Calcula el retorno de 3 meses para Quint Switching Filtered"""
+    if len(df) < 4: # Necesita al menos 4 meses de datos (hoy y hace 3 meses)
+        return float('-inf') # Penalizar por no tener suficientes datos
+    try:
+        p0 = df[symbol].iloc[-1]      # Precio hoy
+        p3 = df[symbol].iloc[-4]      # Precio hace 3 meses (3 filas atrás)
+        
+        if p3 <= 0:
+            return float('-inf') # Penalizar divisiones por cero o precios negativos
+        
+        return (p0 / p3) - 1
     except Exception:
         return float('-inf') # Penalizar errores
 
@@ -858,6 +879,70 @@ def weights_composite_dual_mom(df, slices, benchmark):
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
+def weights_quint_switching_filtered(df, risky, defensive):
+    """Calcula señales para Quint Switching Filtered"""
+    # Necesita al menos 4 meses de datos para calcular ROC_3
+    if len(df) < 4:
+        return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+    
+    sig = []
+    # Calcular señales para cada mes disponible (desde el mes 4 en adelante)
+    for i in range(4, len(df)):
+        try:
+            df_subset = df.iloc[:i] # Datos hasta el final del mes i-1
+            
+            # 1. Calcular ROC_3 para todos los activos de riesgo
+            risky_roc = {s: roc_3(df_subset, s) for s in risky if s in df_subset.columns}
+            
+            # 2. Verificar si alguno de los ROC_3 de riesgo es negativo
+            any_risky_negative = any(roc <= 0 for roc in risky_roc.values())
+            
+            w = {}
+            if any_risky_negative:
+                # Condición 1: Al menos un activo de riesgo tiene ROC_3 <= 0
+                # Seleccionar el activo defensivo con el mejor ROC_3
+                defensive_roc = {s: roc_3(df_subset, s) for s in defensive if s in df_subset.columns}
+                if defensive_roc:
+                    best_defensive = max(defensive_roc, key=defensive_roc.get)
+                    w = {best_defensive: 1.0}
+            else:
+                # Condición 2: Todos los activos de riesgo tienen ROC_3 > 0
+                # Seleccionar el activo de riesgo con el mejor ROC_3
+                if risky_roc:
+                    best_risky = max(risky_roc, key=risky_roc.get)
+                    w = {best_risky: 1.0}
+            
+            # 3. Añadir la señal calculada para el inicio del mes i
+            sig.append((df.index[i], w))
+        except Exception as e:
+            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
+
+    # Añadir señal para el último mes disponible (si hay suficientes datos)
+    if len(df) >= 4:
+        try:
+            df_subset = df # Todos los datos disponibles
+            risky_roc = {s: roc_3(df_subset, s) for s in risky if s in df_subset.columns}
+            any_risky_negative = any(roc <= 0 for roc in risky_roc.values())
+            
+            w = {}
+            if any_risky_negative:
+                defensive_roc = {s: roc_3(df_subset, s) for s in defensive if s in df_subset.columns}
+                if defensive_roc:
+                    best_defensive = max(defensive_roc, key=defensive_roc.get)
+                    w = {best_defensive: 1.0}
+            else:
+                if risky_roc:
+                    best_risky = max(risky_roc, key=risky_roc.get)
+                    w = {best_risky: 1.0}
+            
+            sig.append((df.index[-1], w))
+        except Exception as e:
+            sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
+    
+    # Eliminar duplicados por fecha manteniendo el último (más reciente)
+    sig = list({s[0]: s for s in sig}.values())
+    return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+
 # ------------- FUNCIONES AUXILIARES PARA SEÑALES -------------
 def format_signal_for_display(signal_dict):
     """Formatea un diccionario de señal para mostrarlo como tabla"""
@@ -885,13 +970,17 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         all_tickers_needed = set()
         for s in active:
             strategy = ALL_STRATEGIES[s]
-            # Actualización para manejar la nueva estructura de COMPOSITE_DUAL_MOM
+            # Actualización para manejar la nueva estructura de COMPOSITE_DUAL_MOM y QUINT_SWITCHING_FILTERED
             if s == "Composite Dual Momentum":
                 # Añadir activos de las rebanadas
                 for assets in strategy["slices"].values():
                     all_tickers_needed.update(assets)
                 # Añadir el benchmark
                 all_tickers_needed.add(strategy["benchmark"])
+            elif s == "Quint Switching Filtered":
+                # Añadir activos de riesgo y defensivos
+                all_tickers_needed.update(strategy["risky"])
+                all_tickers_needed.update(strategy["defensive"])
             else:
                 # Lógica existente para otras estrategias
                 for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective", "safe"]:
@@ -980,6 +1069,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_current = weights_composite_dual_mom(df_full,
                                                            ALL_STRATEGIES[s]["slices"],
                                                            ALL_STRATEGIES[s]["benchmark"])
+                elif s == "Quint Switching Filtered":
+                    # Señal REAL: usando datos hasta el final del mes anterior
+                    sig_last = weights_quint_switching_filtered(df_up_to_last_month_end,
+                                                               ALL_STRATEGIES[s]["risky"],
+                                                               ALL_STRATEGIES[s]["defensive"])
+                    # Señal HIPOTÉTICA: usando todos los datos
+                    sig_current = weights_quint_switching_filtered(df_full,
+                                                                 ALL_STRATEGIES[s]["risky"],
+                                                                 ALL_STRATEGIES[s]["defensive"])
                 # Guardar la última señal de cada tipo
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]  # (fecha, pesos_dict)
@@ -1056,6 +1154,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     strategy_signals[s] = weights_composite_dual_mom(df_filtered,
                                                                    ALL_STRATEGIES[s]["slices"],
                                                                    ALL_STRATEGIES[s]["benchmark"])
+                elif s == "Quint Switching Filtered":
+                    strategy_signals[s] = weights_quint_switching_filtered(df_filtered,
+                                                                         ALL_STRATEGIES[s]["risky"],
+                                                                         ALL_STRATEGIES[s]["defensive"])
 
             # 2. Preparar estructura para la cartera combinada
             # Las fechas de rebalanceo son las fechas de las señales
@@ -1204,6 +1306,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      sig_list = weights_composite_dual_mom(df_filtered,
                                                          ALL_STRATEGIES[s]["slices"],
                                                          ALL_STRATEGIES[s]["benchmark"])
+                 elif s == "Quint Switching Filtered":
+                     sig_list = weights_quint_switching_filtered(df_filtered,
+                                                               ALL_STRATEGIES[s]["risky"],
+                                                               ALL_STRATEGIES[s]["defensive"])
 
                  # Extraer fechas de rebalanceo y señales para esta estrategia
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
