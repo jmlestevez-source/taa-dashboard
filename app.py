@@ -986,8 +986,10 @@ def weights_quint_switching_filtered(df, risky, defensive):
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
+# ... (código anterior) ...
+
 def weights_baa_aggressive(df, offensive, defensive, canary):
-    """Calcula señales para BAA Aggressive"""
+    """Calcula señales para BAA Aggressive - LÓGICA CORREGIDA"""
     # Necesita al menos 13 meses de datos para calcular momentum y SMA
     if len(df) < 13:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
@@ -1006,40 +1008,53 @@ def weights_baa_aggressive(df, offensive, defensive, canary):
             
             w = {}
             if any_canary_negative:
-                # Etapa 3b: Asignación Defensiva
-                # Calcular SMA12 para defensivos
-                defensive_sma = {s: sma_12(df_subset, s) for s in defensive if s in df_subset.columns}
-                # Seleccionar top 3 defensivos por SMA12
-                top_3_def = sorted(defensive_sma, key=defensive_sma.get, reverse=True)[:3]
+                # Etapa 3b: Asignación Defensiva - LÓGICA CORREGIDA
+                # Calcular SMA12 y precio actual para defensivos
+                defensive_info = {}
+                for s in defensive:
+                    if s in df_subset.columns:
+                        sma_val = sma_12(df_subset, s)
+                        price_val = df_subset[s].iloc[-1]
+                        # Solo considerar si SMA es válida y positiva, y precio es válido
+                        if sma_val > 0 and not pd.isna(price_val) and price_val > 0:
+                            defensive_info[s] = {
+                                'sma': sma_val,
+                                'price': price_val,
+                                'rs': (price_val / sma_val) - 1
+                            }
                 
-                if len(top_3_def) == 3:
-                    # Calcular SMA12 para BIL
-                    sma_bil = sma_12(df_subset, 'BIL') if 'BIL' in df_subset.columns else 0
-                    
-                    selected_assets = []
+                # Calcular SMA12 y RS para BIL
+                sma_bil = sma_12(df_subset, 'BIL') if 'BIL' in df_subset.columns else 0
+                price_bil = df_subset['BIL'].iloc[-1] if 'BIL' in df_subset.columns else 0
+                rs_bil = (price_bil / sma_bil) - 1 if sma_bil > 0 and not pd.isna(price_bil) and price_bil > 0 else float('-inf')
+                
+                # Seleccionar defensivos que estén por encima de su SMA12 (RS > 0)
+                above_sma_def = {s: info for s, info in defensive_info.items() if info['rs'] > 0}
+                
+                # Seleccionar los 3 mejores defensivos por SMA12 (de los que están arriba)
+                top_3_def = sorted(above_sma_def.keys(), key=lambda s: above_sma_def[s]['sma'], reverse=True)[:3]
+                
+                selected_assets = []
+                if len(top_3_def) > 0:
+                    # Aplicar regla de reemplazo con BIL para cada uno de los top 3
                     for asset in top_3_def:
-                        # Calcular Relative Strength vs SMA12 para el activo defensivo
-                        price_asset = df_subset[asset].iloc[-1]
-                        sma_asset = defensive_sma[asset]
-                        rs_asset = (price_asset / sma_asset) - 1 if sma_asset > 0 and price_asset > 0 else float('-inf')
-                        
-                        # Calcular Relative Strength vs SMA12 para BIL
-                        price_bil = df_subset['BIL'].iloc[-1] if 'BIL' in df_subset.columns else 0
-                        rs_bil = (price_bil / sma_bil) - 1 if sma_bil > 0 and price_bil > 0 else float('-inf')
-                        
-                        # Comparar y decidir
-                        if rs_asset > rs_bil:
-                            selected_assets.append(asset)
-                        else:
-                            # Reemplazar por BIL
+                        rs_asset = above_sma_def[asset]['rs']
+                        # Si el RS del activo es <= RS de BIL, reemplazar por BIL
+                        if rs_asset <= rs_bil:
                             selected_assets.append('BIL')
-                    
-                    # Asignar 33.33% a cada uno de los 3 seleccionados (incluyendo posibles BILs)
-                    for asset in selected_assets:
-                        # Manejar posibles duplicados (varios 'BIL') sumando pesos
-                        w[asset] = w.get(asset, 0) + 1/3 
-                # Si no hay 3 defensivos disponibles, la cartera queda vacía o ponderada con los que haya.
+                        else:
+                            selected_assets.append(asset)
+                else:
+                    # Si ninguno está por encima de su SMA12, se podría invertir en BIL
+                    # La regla no es clara aquí, pero una interpretación común es asignar todo a BIL
+                    # Otra opción es mantenerse en efectivo. Vamos a asignar a BIL.
+                    selected_assets = ['BIL']
                 
+                # Asignar 33.33% a cada uno de los seleccionados (incluyendo posibles BILs)
+                # Manejar posibles duplicados (varios 'BIL') sumando pesos
+                for asset in selected_assets:
+                    w[asset] = w.get(asset, 0) + 1/len(selected_assets) if len(selected_assets) > 0 else 0
+                    
             else:
                 # Etapa 3a: Asignación Ofensiva
                 # Calcular SMA12 para ofensivos
@@ -1048,10 +1063,11 @@ def weights_baa_aggressive(df, offensive, defensive, canary):
                 if offensive_sma:
                     best_offensive = max(offensive_sma, key=offensive_sma.get)
                     w = {best_offensive: 1.0}
-            
+                
             # Añadir la señal calculada para el inicio del mes i
             sig.append((df.index[i], w))
         except Exception as e:
+            # En caso de error, añadir señal vacía para esta fecha
             sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
 
     # Añadir señal para el último mes disponible (si hay suficientes datos)
@@ -1063,28 +1079,42 @@ def weights_baa_aggressive(df, offensive, defensive, canary):
             
             w = {}
             if any_canary_negative:
-                defensive_sma = {s: sma_12(df_subset, s) for s in defensive if s in df_subset.columns}
-                top_3_def = sorted(defensive_sma, key=defensive_sma.get, reverse=True)[:3]
+                # Etapa 3b: Asignación Defensiva - LÓGICA CORREGIDA
+                defensive_info = {}
+                for s in defensive:
+                    if s in df_subset.columns:
+                        sma_val = sma_12(df_subset, s)
+                        price_val = df_subset[s].iloc[-1]
+                        if sma_val > 0 and not pd.isna(price_val) and price_val > 0:
+                            defensive_info[s] = {
+                                'sma': sma_val,
+                                'price': price_val,
+                                'rs': (price_val / sma_val) - 1
+                            }
                 
-                if len(top_3_def) == 3:
-                    sma_bil = sma_12(df_subset, 'BIL') if 'BIL' in df_subset.columns else 0
-                    selected_assets = []
+                sma_bil = sma_12(df_subset, 'BIL') if 'BIL' in df_subset.columns else 0
+                price_bil = df_subset['BIL'].iloc[-1] if 'BIL' in df_subset.columns else 0
+                rs_bil = (price_bil / sma_bil) - 1 if sma_bil > 0 and not pd.isna(price_bil) and price_bil > 0 else float('-inf')
+                
+                above_sma_def = {s: info for s, info in defensive_info.items() if info['rs'] > 0}
+                top_3_def = sorted(above_sma_def.keys(), key=lambda s: above_sma_def[s]['sma'], reverse=True)[:3]
+                
+                selected_assets = []
+                if len(top_3_def) > 0:
                     for asset in top_3_def:
-                        price_asset = df_subset[asset].iloc[-1]
-                        sma_asset = defensive_sma[asset]
-                        rs_asset = (price_asset / sma_asset) - 1 if sma_asset > 0 and price_asset > 0 else float('-inf')
-                        
-                        price_bil = df_subset['BIL'].iloc[-1] if 'BIL' in df_subset.columns else 0
-                        rs_bil = (price_bil / sma_bil) - 1 if sma_bil > 0 and price_bil > 0 else float('-inf')
-                        
-                        if rs_asset > rs_bil:
-                            selected_assets.append(asset)
-                        else:
+                        rs_asset = above_sma_def[asset]['rs']
+                        if rs_asset <= rs_bil:
                             selected_assets.append('BIL')
+                        else:
+                            selected_assets.append(asset)
+                else:
+                    selected_assets = ['BIL']
+                
+                for asset in selected_assets:
+                    w[asset] = w.get(asset, 0) + 1/len(selected_assets) if len(selected_assets) > 0 else 0
                     
-                    for asset in selected_assets:
-                        w[asset] = w.get(asset, 0) + 1/3 
             else:
+                # Etapa 3a: Asignación Ofensiva
                 offensive_sma = {s: sma_12(df_subset, s) for s in offensive if s in df_subset.columns}
                 if offensive_sma:
                     best_offensive = max(offensive_sma, key=offensive_sma.get)
@@ -1097,6 +1127,8 @@ def weights_baa_aggressive(df, offensive, defensive, canary):
     # Eliminar duplicados por fecha manteniendo el último (más reciente)
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+
+# ... (resto del código) ...
 
 # ------------- FUNCIONES AUXILIARES PARA SEÑALES -------------
 def format_signal_for_display(signal_dict):
