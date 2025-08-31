@@ -180,6 +180,34 @@ def get_fmp_data(ticker, days=365*10): # Descargar más datos históricos por de
         st.error(f"❌ Error obteniendo datos de FMP para {ticker}: {e}")
         return pd.DataFrame()
 
+def append_csv_historical_data(fmp_df, ticker):
+    """Añade datos históricos del CSV que estén antes del rango de FMP"""
+    try:
+        # Cargar datos históricos desde CSV
+        csv_df = load_historical_data_from_csv(ticker)
+        if not csv_df.empty and not fmp_df.empty:
+            # Encontrar la fecha mínima de los datos de FMP
+            fmp_min_date = fmp_df.index.min()
+            
+            # Filtrar datos del CSV que sean anteriores a la fecha mínima de FMP
+            csv_older_data = csv_df[csv_df.index < fmp_min_date]
+            
+            if not csv_older_data.empty:
+                st.write(f"🔄 Añadiendo {len(csv_older_data)} registros históricos de CSV para {ticker} (anteriores a {fmp_min_date.strftime('%Y-%m-%d')})")
+                # Concatenar los datos antiguos del CSV con los datos de FMP
+                combined_df = pd.concat([csv_older_data, fmp_df])
+                # Eliminar duplicados y ordenar
+                combined_df = combined_df[~combined_df.index.duplicated(keep='last')].sort_index()
+                return combined_df
+            else:
+                st.write(f"ℹ️ No hay datos históricos adicionales en CSV para {ticker}")
+                return fmp_df
+        else:
+            return fmp_df
+    except Exception as e:
+        st.warning(f"⚠️ Error añadiendo datos históricos de CSV para {ticker}: {e}")
+        return fmp_df
+
 def download_ticker_data(ticker, start, end):
     """Descarga datos combinando FMP (primero) + CSV (fallback) + datos históricos CSV adicionales"""
     # Intentar cargar desde caché primero
@@ -193,6 +221,9 @@ def download_ticker_data(ticker, start, end):
         
         if not fmp_df.empty:
             st.write(f"✅ Datos de FMP obtenidos para {ticker}")
+            # Añadir datos históricos del CSV que estén antes del rango de FMP
+            fmp_df = append_csv_historical_data(fmp_df, ticker)
+            
             # Filtrar por rango de fechas
             fmp_df_filtered = fmp_df[(fmp_df.index >= pd.Timestamp(start)) & 
                                    (fmp_df.index <= pd.Timestamp(end))]
