@@ -269,6 +269,7 @@ def download_ticker_data(ticker, start, end):
                 recent_df = get_fmp_data(ticker, days=35)
             else:
                 # st.write(f"✅ Datos CSV de {ticker} son recientes, no se necesita FMP adicional.") # Ocultar log
+                combined_df = csv_df
             if not recent_df.empty:
                 combined_df = pd.concat([csv_df, recent_df])
                 combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
