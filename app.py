@@ -68,7 +68,7 @@ SISTEMA_DESCORRELACION = {
 
 # Nueva estrategia: Sistema Factores
 SISTEMA_FACTORES = {
-    "tickers": ['IS3S.DE', 'IS3Q.DE', 'IS3R.DE', 'IQQ0.DE', 'IBCZ.DE', 'VGWD.DE', 'WTEM.DE', 'IUSM.DE']
+    "tickers": ['IS3S.DE', 'IS3Q.DE', 'IS3R.DE', 'IQQ0.DE', 'IBCZ.DE', 'VGWE.DE', 'WTEM.DE', 'IUSM.DE']
 }
 
 ALL_STRATEGIES = {
