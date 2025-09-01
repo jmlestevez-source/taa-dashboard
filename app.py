@@ -17,7 +17,7 @@ st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
 st.title("🎯 Multi-Strategy Tactical Asset Allocation")
 
 # ------------- SIDEBAR -------------
-initial_capital = st.sidebar.number_input("💰 Capital Inicial ($)", 1000, 10_000_000, 100_000, 1000)
+initial_capital = st.sidebar.number_input("💰 Capital Inicial ($)", 1000, 10_000_000, 100000, 1000)
 start_date = st.sidebar.date_input("Fecha de inicio", datetime(2015, 1, 1))
 end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today())
 
@@ -65,6 +65,10 @@ SISTEMA_DESCORRELACION = {
     "main": ['VTI', 'GLD', 'TLT'],
     "secondary": ['SPY', 'QQQ', 'MDY', 'EFA']
 }
+# Nueva estrategia
+SISTEMA_FACTORES = {
+    "universe": ['IQQ0.DE', 'IBCZ.DE', 'IS3Q.DE', 'IS3S.DE', 'IS3R.DE', 'IUSM.DE', 'VGWE.DE', 'WTEM.DE', 'MSE.PA', 'IEFM.L']
+}
 
 ALL_STRATEGIES = {
     "DAA KELLER": DAA_KELLER, 
@@ -74,7 +78,8 @@ ALL_STRATEGIES = {
     "Composite Dual Momentum": COMPOSITE_DUAL_MOM,
     "Quint Switching Filtered": QUINT_SWITCHING_FILTERED,
     "BAA Aggressive": BAA_AGGRESSIVE,
-    "Sistema Descorrelación": SISTEMA_DESCORRELACION
+    "Sistema Descorrelación": SISTEMA_DESCORRELACION,
+    "Sistema Factores": SISTEMA_FACTORES
 }
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
@@ -457,22 +462,22 @@ def roc_3(df, symbol):
         return float('-inf') # Penalizar errores
 
 def roc_6(df, symbol):
-    """Calcula el ROC de 6 meses para Sistema Descorrelación"""
+    """Calcula el retorno de 6 meses para Sistema Factores"""
     if len(df) < 7: # Necesita al menos 7 meses de datos (hoy y hace 6 meses)
         return float('-inf') # Penalizar por no tener suficientes datos
     try:
         p0 = df[symbol].iloc[-1]      # Precio hoy
         p6 = df[symbol].iloc[-7]      # Precio hace 6 meses (6 filas atrás)
-
+        
         if p6 <= 0:
             return float('-inf') # Penalizar divisiones por cero o precios negativos
-
+        
         return (p0 / p6) - 1
     except Exception:
         return float('-inf') # Penalizar errores
 
 def sma_12(df, symbol):
-    """Calcula la media móvil simple de 12 meses"""
+    """Calcula la media móvil simple de 12 meses para BAA Aggressive"""
     if len(df) < 12:
         return 0 # O float('nan') si prefieres manejarlo como tal
     try:
@@ -485,7 +490,7 @@ def sma_12(df, symbol):
         return 0
 
 def momentum_score_13612w(df, symbol):
-    """Calcula el momentum score 13612W"""
+    """Calcula el momentum score 13612W para BAA Aggressive"""
     if len(df) < 13: # Necesita al menos 13 meses de datos (hoy y hace 12 meses)
         return 0 # Penalizar por no tener suficientes datos
     try:
@@ -1008,7 +1013,7 @@ def weights_quint_switching_filtered(df, risky, defensive):
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_baa_aggressive(df, offensive, defensive, canary):
-    """Calcula señales para BAA Aggressive - LÓGICA CORREGIDA"""
+    """Calcula señales para BAA Aggressive"""
     # Necesita al menos 13 meses de datos para calcular momentum y SMA
     if len(df) < 13:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
@@ -1027,53 +1032,40 @@ def weights_baa_aggressive(df, offensive, defensive, canary):
             
             w = {}
             if any_canary_negative:
-                # Etapa 3b: Asignación Defensiva - LÓGICA CORREGIDA
-                # Calcular SMA12 y precio actual para defensivos
-                defensive_info = {}
-                for s in defensive:
-                    if s in df_subset.columns:
-                        sma_val = sma_12(df_subset, s)
-                        price_val = df_subset[s].iloc[-1]
-                        # Solo considerar si SMA es válida y positiva, y precio es válido
-                        if sma_val > 0 and not pd.isna(price_val) and price_val > 0:
-                            defensive_info[s] = {
-                                'sma': sma_val,
-                                'price': price_val,
-                                'rs': (price_val / sma_val) - 1
-                            }
+                # Etapa 3b: Asignación Defensiva
+                # Calcular SMA12 para defensivos
+                defensive_sma = {s: sma_12(df_subset, s) for s in defensive if s in df_subset.columns}
+                # Seleccionar top 3 defensivos por SMA12
+                top_3_def = sorted(defensive_sma, key=defensive_sma.get, reverse=True)[:3]
                 
-                # Calcular SMA12 y RS para BIL
-                sma_bil = sma_12(df_subset, 'BIL') if 'BIL' in df_subset.columns else 0
-                price_bil = df_subset['BIL'].iloc[-1] if 'BIL' in df_subset.columns else 0
-                rs_bil = (price_bil / sma_bil) - 1 if sma_bil > 0 and not pd.isna(price_bil) and price_bil > 0 else float('-inf')
-                
-                # Seleccionar defensivos que estén por encima de su SMA12 (RS > 0)
-                above_sma_def = {s: info for s, info in defensive_info.items() if info['rs'] > 0}
-                
-                # Seleccionar los 3 mejores defensivos por SMA12 (de los que están arriba)
-                top_3_def = sorted(above_sma_def.keys(), key=lambda s: above_sma_def[s]['sma'], reverse=True)[:3]
-                
-                selected_assets = []
-                if len(top_3_def) > 0:
-                    # Aplicar regla de reemplazo con BIL para cada uno de los top 3
-                    for asset in top_3_def:
-                        rs_asset = above_sma_def[asset]['rs']
-                        # Si el RS del activo es <= RS de BIL, reemplazar por BIL
-                        if rs_asset <= rs_bil:
-                            selected_assets.append('BIL')
-                        else:
-                            selected_assets.append(asset)
-                else:
-                    # Si ninguno está por encima de su SMA12, se podría invertir en BIL
-                    # La regla no es clara aquí, pero una interpretación común es asignar todo a BIL
-                    # Otra opción es mantenerse en efectivo. Vamos a asignar a BIL.
-                    selected_assets = ['BIL']
-                
-                # Asignar 33.33% a cada uno de los seleccionados (incluyendo posibles BILs)
-                # Manejar posibles duplicados (varios 'BIL') sumando pesos
-                for asset in selected_assets:
-                    w[asset] = w.get(asset, 0) + 1/len(selected_assets) if len(selected_assets) > 0 else 0
+                if len(top_3_def) == 3:
+                    # Calcular SMA12 para BIL
+                    sma_bil = sma_12(df_subset, 'BIL') if 'BIL' in df_subset.columns else 0
                     
+                    selected_assets = []
+                    for asset in top_3_def:
+                        # Calcular Relative Strength vs SMA12 para el activo defensivo
+                        price_asset = df_subset[asset].iloc[-1]
+                        sma_asset = defensive_sma[asset]
+                        rs_asset = (price_asset / sma_asset) - 1 if sma_asset > 0 and price_asset > 0 else float('-inf')
+                        
+                        # Calcular Relative Strength vs SMA12 para BIL
+                        price_bil = df_subset['BIL'].iloc[-1] if 'BIL' in df_subset.columns else 0
+                        rs_bil = (price_bil / sma_bil) - 1 if sma_bil > 0 and price_bil > 0 else float('-inf')
+                        
+                        # Comparar y decidir
+                        if rs_asset > rs_bil:
+                            selected_assets.append(asset)
+                        else:
+                            # Reemplazar por BIL
+                            selected_assets.append('BIL')
+                    
+                    # Asignar 33.33% a cada uno de los 3 seleccionados (incluyendo posibles BILs)
+                    for asset in selected_assets:
+                        # Manejar posibles duplicados (varios 'BIL') sumando pesos
+                        w[asset] = w.get(asset, 0) + 1/3 
+                # Si no hay 3 defensivos disponibles, la cartera queda vacía o ponderada con los que haya.
+                
             else:
                 # Etapa 3a: Asignación Ofensiva
                 # Calcular SMA12 para ofensivos
@@ -1082,7 +1074,7 @@ def weights_baa_aggressive(df, offensive, defensive, canary):
                 if offensive_sma:
                     best_offensive = max(offensive_sma, key=offensive_sma.get)
                     w = {best_offensive: 1.0}
-                
+            
             # Añadir la señal calculada para el inicio del mes i
             sig.append((df.index[i], w))
         except Exception as e:
@@ -1097,42 +1089,28 @@ def weights_baa_aggressive(df, offensive, defensive, canary):
             
             w = {}
             if any_canary_negative:
-                # Etapa 3b: Asignación Defensiva - LÓGICA CORREGIDA
-                defensive_info = {}
-                for s in defensive:
-                    if s in df_subset.columns:
-                        sma_val = sma_12(df_subset, s)
-                        price_val = df_subset[s].iloc[-1]
-                        if sma_val > 0 and not pd.isna(price_val) and price_val > 0:
-                            defensive_info[s] = {
-                                'sma': sma_val,
-                                'price': price_val,
-                                'rs': (price_val / sma_val) - 1
-                            }
+                defensive_sma = {s: sma_12(df_subset, s) for s in defensive if s in df_subset.columns}
+                top_3_def = sorted(defensive_sma, key=defensive_sma.get, reverse=True)[:3]
                 
-                sma_bil = sma_12(df_subset, 'BIL') if 'BIL' in df_subset.columns else 0
-                price_bil = df_subset['BIL'].iloc[-1] if 'BIL' in df_subset.columns else 0
-                rs_bil = (price_bil / sma_bil) - 1 if sma_bil > 0 and not pd.isna(price_bil) and price_bil > 0 else float('-inf')
-                
-                above_sma_def = {s: info for s, info in defensive_info.items() if info['rs'] > 0}
-                top_3_def = sorted(above_sma_def.keys(), key=lambda s: above_sma_def[s]['sma'], reverse=True)[:3]
-                
-                selected_assets = []
-                if len(top_3_def) > 0:
+                if len(top_3_def) == 3:
+                    sma_bil = sma_12(df_subset, 'BIL') if 'BIL' in df_subset.columns else 0
+                    selected_assets = []
                     for asset in top_3_def:
-                        rs_asset = above_sma_def[asset]['rs']
-                        if rs_asset <= rs_bil:
-                            selected_assets.append('BIL')
-                        else:
+                        price_asset = df_subset[asset].iloc[-1]
+                        sma_asset = defensive_sma[asset]
+                        rs_asset = (price_asset / sma_asset) - 1 if sma_asset > 0 and price_asset > 0 else float('-inf')
+                        
+                        price_bil = df_subset['BIL'].iloc[-1] if 'BIL' in df_subset.columns else 0
+                        rs_bil = (price_bil / sma_bil) - 1 if sma_bil > 0 and price_bil > 0 else float('-inf')
+                        
+                        if rs_asset > rs_bil:
                             selected_assets.append(asset)
-                else:
-                    selected_assets = ['BIL']
-                
-                for asset in selected_assets:
-                    w[asset] = w.get(asset, 0) + 1/len(selected_assets) if len(selected_assets) > 0 else 0
+                        else:
+                            selected_assets.append('BIL')
                     
+                    for asset in selected_assets:
+                        w[asset] = w.get(asset, 0) + 1/3 
             else:
-                # Etapa 3a: Asignación Ofensiva
                 offensive_sma = {s: sma_12(df_subset, s) for s in offensive if s in df_subset.columns}
                 if offensive_sma:
                     best_offensive = max(offensive_sma, key=offensive_sma.get)
@@ -1148,7 +1126,7 @@ def weights_baa_aggressive(df, offensive, defensive, canary):
 
 def weights_sistema_descorrelacion(df, main, secondary):
     """Calcula señales para Sistema Descorrelación"""
-    # Necesita al menos 7 meses de datos para calcular ROC_6
+    # Necesita al menos 7 meses de datos para calcular ROC_3
     if len(df) < 7:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     
@@ -1158,41 +1136,28 @@ def weights_sistema_descorrelacion(df, main, secondary):
         try:
             df_subset = df.iloc[:i] # Datos hasta el final del mes i-1
             
-            # Paso 1: Calcular ROC(6) para el universo principal
-            main_roc = {s: roc_6(df_subset, s) for s in main if s in df_subset.columns}
+            # 1. Calcular ROC_3 para todos los activos de riesgo
+            risky_roc = {s: roc_3(df_subset, s) for s in main if s in df_subset.columns}
             
-            # Paso 2: Seleccionar los 2 con mejor ROC(6)
-            top_2_main = sorted(main_roc, key=main_roc.get, reverse=True)[:2]
+            # 2. Verificar si alguno de los ROC_3 de riesgo es negativo
+            any_risky_negative = any(roc <= 0 for roc in risky_roc.values())
             
             w = {}
-            # Paso 3a: Si VTI NO está entre los 2 seleccionados
-            if 'VTI' not in top_2_main:
-                # Asignar 50% a cada uno de los 2 seleccionados
-                for asset in top_2_main:
-                    w[asset] = 0.5
-            
-            # Paso 3b: Si VTI SÍ está entre los 2 seleccionados
+            if any_risky_negative:
+                # Condición 1: Al menos un activo de riesgo tiene ROC_3 <= 0
+                # Seleccionar el activo defensivo con el mejor ROC_3
+                defensive_roc = {s: roc_3(df_subset, s) for s in secondary if s in df_subset.columns}
+                if defensive_roc:
+                    best_defensive = max(defensive_roc, key=defensive_roc.get)
+                    w = {best_defensive: 1.0}
             else:
-                # Paso 3b.1: Descartar VTI
-                # Paso 3b.2: Identificar el otro ETF seleccionado
-                other_selected = [asset for asset in top_2_main if asset != 'VTI']
-                other_etf = other_selected[0] if other_selected else None
-                
-                # Paso 3b.3: Calcular ROC(6) para el universo secundario
-                secondary_roc = {s: roc_6(df_subset, s) for s in secondary if s in df_subset.columns}
-                
-                # Paso 3b.4: Seleccionar los 2 con mejor ROC(6) del grupo secundario
-                top_2_secondary = sorted(secondary_roc, key=secondary_roc.get, reverse=True)[:2]
-                
-                # Paso 3b.5: Asignación Final
-                # 50% en el "otro ETF"
-                if other_etf:
-                    w[other_etf] = 0.5
-                # 25% en cada uno de los 2 mejores del grupo secundario
-                for asset in top_2_secondary:
-                    w[asset] = 0.25
+                # Condición 2: Todos los activos de riesgo tienen ROC_3 > 0
+                # Seleccionar el activo de riesgo con el mejor ROC_3
+                if risky_roc:
+                    best_risky = max(risky_roc, key=risky_roc.get)
+                    w = {best_risky: 1.0}
             
-            # Añadir la señal calculada para el inicio del mes i
+            # 3. Añadir la señal calculada para el inicio del mes i
             sig.append((df.index[i], w))
         except Exception as e:
             sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
@@ -1201,24 +1166,104 @@ def weights_sistema_descorrelacion(df, main, secondary):
     if len(df) >= 7:
         try:
             df_subset = df # Todos los datos disponibles
-            main_roc = {s: roc_6(df_subset, s) for s in main if s in df_subset.columns}
-            top_2_main = sorted(main_roc, key=main_roc.get, reverse=True)[:2]
+            risky_roc = {s: roc_3(df_subset, s) for s in main if s in df_subset.columns}
+            any_risky_negative = any(roc <= 0 for roc in risky_roc.values())
             
             w = {}
-            if 'VTI' not in top_2_main:
-                for asset in top_2_main:
-                    w[asset] = 0.5
+            if any_risky_negative:
+                defensive_roc = {s: roc_3(df_subset, s) for s in secondary if s in df_subset.columns}
+                if defensive_roc:
+                    best_defensive = max(defensive_roc, key=defensive_roc.get)
+                    w = {best_defensive: 1.0}
             else:
-                other_selected = [asset for asset in top_2_main if asset != 'VTI']
-                other_etf = other_selected[0] if other_selected else None
-                
-                secondary_roc = {s: roc_6(df_subset, s) for s in secondary if s in df_subset.columns}
-                top_2_secondary = sorted(secondary_roc, key=secondary_roc.get, reverse=True)[:2]
-                
-                if other_etf:
-                    w[other_etf] = 0.5
-                for asset in top_2_secondary:
-                    w[asset] = 0.25
+                if risky_roc:
+                    best_risky = max(risky_roc, key=risky_roc.get)
+                    w = {best_risky: 1.0}
+            
+            sig.append((df.index[-1], w))
+        except Exception as e:
+            sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
+    
+    # Eliminar duplicados por fecha manteniendo el último (más reciente)
+    sig = list({s[0]: s for s in sig}.values())
+    return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+
+def weights_sistema_factores(df, universe):
+    """Calcula señales para Sistema Factores"""
+    # Necesita al menos 13 meses de datos para calcular ROC_12
+    if len(df) < 13:
+        return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+    
+    sig = []
+    # Calcular señales para cada mes disponible (desde el mes 13 en adelante)
+    for i in range(13, len(df)):
+        try:
+            df_subset = df.iloc[:i] # Datos hasta el final del mes i-1
+            
+            # 1. Calcular ROC_6 y ROC_12 para cada activo del universo
+            asset_scores = {}
+            for asset in universe:
+                if asset in df_subset.columns:
+                    roc_6_val = roc_6(df_subset, asset) # Reutilizamos la función existente
+                    roc_12_val = roc_12(df_subset, asset) # Reutilizamos la función existente
+                    # Calcular promedio ROC
+                    avg_roc = (roc_6_val + roc_12_val) / 2
+                    asset_scores[asset] = {
+                        'roc_6': roc_6_val,
+                        'roc_12': roc_12_val,
+                        'avg_roc': avg_roc
+                    }
+            
+            # 2. Filtrar activos con promedio ROC positivo
+            positive_avg_assets = {asset: scores for asset, scores in asset_scores.items() if scores['avg_roc'] > 0}
+            
+            # 3. Ordenar por promedio ROC descendente y seleccionar top 2
+            sorted_assets = sorted(positive_avg_assets.keys(), key=lambda a: positive_avg_assets[a]['avg_roc'], reverse=True)
+            top_2_assets = sorted_assets[:2]
+            
+            # 4. Asignar pesos
+            w = {}
+            if len(top_2_assets) == 2:
+                # Invertir 50% en cada uno de los 2 mejores
+                w[top_2_assets[0]] = 0.5
+                w[top_2_assets[1]] = 0.5
+            elif len(top_2_assets) == 1:
+                # Invertir 50% en el único activo positivo
+                w[top_2_assets[0]] = 0.5
+                # El 50% restante se queda en efectivo (peso 0 en activos)
+            # Si no hay activos positivos, w queda vacío (100% efectivo)
+            
+            # Añadir la señal calculada para el inicio del mes i
+            sig.append((df.index[i], w))
+        except Exception as e:
+            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
+
+    # Añadir señal para el último mes disponible (si hay suficientes datos)
+    if len(df) >= 13:
+        try:
+            df_subset = df # Todos los datos disponibles
+            asset_scores = {}
+            for asset in universe:
+                if asset in df_subset.columns:
+                    roc_6_val = roc_6(df_subset, asset)
+                    roc_12_val = roc_12(df_subset, asset)
+                    avg_roc = (roc_6_val + roc_12_val) / 2
+                    asset_scores[asset] = {
+                        'roc_6': roc_6_val,
+                        'roc_12': roc_12_val,
+                        'avg_roc': avg_roc
+                    }
+            
+            positive_avg_assets = {asset: scores for asset, scores in asset_scores.items() if scores['avg_roc'] > 0}
+            sorted_assets = sorted(positive_avg_assets.keys(), key=lambda a: positive_avg_assets[a]['avg_roc'], reverse=True)
+            top_2_assets = sorted_assets[:2]
+            
+            w = {}
+            if len(top_2_assets) == 2:
+                w[top_2_assets[0]] = 0.5
+                w[top_2_assets[1]] = 0.5
+            elif len(top_2_assets) == 1:
+                w[top_2_assets[0]] = 0.5
             
             sig.append((df.index[-1], w))
         except Exception as e:
@@ -1255,7 +1300,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         all_tickers_needed = set()
         for s in active:
             strategy = ALL_STRATEGIES[s]
-            # Actualización para manejar la nueva estructura de COMPOSITE_DUAL_MOM, QUINT_SWITCHING_FILTERED, BAA_AGGRESSIVE y SISTEMA_DESCORRELACION
+            # Actualización para manejar la nueva estructura de COMPOSITE_DUAL_MOM, QUINT_SWITCHING_FILTERED, BAA_AGGRESSIVE, SISTEMA_DESCORRELACION y SISTEMA_FACTORES
             if s == "Composite Dual Momentum":
                 # Añadir activos de las rebanadas
                 for assets in strategy["slices"].values():
@@ -1267,7 +1312,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 all_tickers_needed.update(strategy["risky"])
                 all_tickers_needed.update(strategy["defensive"])
             elif s == "BAA Aggressive":
-                # Añadir activos de riesgo, defensivos y canarios
+                # Añadir activos ofensivos, defensivos y canarios
                 all_tickers_needed.update(strategy["offensive"])
                 all_tickers_needed.update(strategy["defensive"])
                 all_tickers_needed.update(strategy["canary"])
@@ -1275,6 +1320,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 # Añadir activos del universo principal y secundario
                 all_tickers_needed.update(strategy["main"])
                 all_tickers_needed.update(strategy["secondary"])
+            elif s == "Sistema Factores":
+                # Añadir activos del universo
+                all_tickers_needed.update(strategy["universe"])
             else:
                 # Lógica existente para otras estrategias
                 for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective", "safe"]:
@@ -1390,8 +1438,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                                              ALL_STRATEGIES[s]["secondary"])
                     # Señal HIPOTÉTICA: usando todos los datos
                     sig_current = weights_sistema_descorrelacion(df_full,
-                                                                 ALL_STRATEGIES[s]["main"],
-                                                                 ALL_STRATEGIES[s]["secondary"])
+                                                               ALL_STRATEGIES[s]["main"],
+                                                               ALL_STRATEGIES[s]["secondary"])
+                elif s == "Sistema Factores": # Nueva condición
+                    # Señal REAL: usando datos hasta el final del mes anterior
+                    sig_last = weights_sistema_factores(df_up_to_last_month_end,
+                                                       ALL_STRATEGIES[s]["universe"])
+                    # Señal HIPOTÉTICA: usando todos los datos
+                    sig_current = weights_sistema_factores(df_full,
+                                                          ALL_STRATEGIES[s]["universe"])
                 # Guardar la última señal de cada tipo
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]  # (fecha, pesos_dict)
@@ -1443,7 +1498,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.markdown("---")
             
             # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
-            if len(df_filtered) < 13:  # Necesitamos al menos 13 meses para las estrategias que lo requieren
+            if len(df_filtered) < 13:  # Necesitamos al menos 13 meses para DAA Keller
                 st.error("❌ No hay suficientes datos en el rango filtrado.")
                 st.stop()
 
@@ -1481,6 +1536,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     strategy_signals[s] = weights_sistema_descorrelacion(df_filtered,
                                                                        ALL_STRATEGIES[s]["main"],
                                                                        ALL_STRATEGIES[s]["secondary"])
+                elif s == "Sistema Factores": # Nueva condición
+                    strategy_signals[s] = weights_sistema_factores(df_filtered,
+                                                                 ALL_STRATEGIES[s]["universe"])
 
             # 2. Preparar estructura para la cartera combinada
             # Las fechas de rebalanceo son las fechas de las señales
@@ -1642,6 +1700,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      sig_list = weights_sistema_descorrelacion(df_filtered,
                                                              ALL_STRATEGIES[s]["main"],
                                                              ALL_STRATEGIES[s]["secondary"])
+                 elif s == "Sistema Factores": # Nueva condición
+                     sig_list = weights_sistema_factores(df_filtered,
+                                                       ALL_STRATEGIES[s]["universe"])
 
                  # Extraer fechas de rebalanceo y señales para esta estrategia
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
