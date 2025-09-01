@@ -141,8 +141,7 @@ def should_use_fmp(csv_df, days_threshold=7):
 def load_historical_data_from_csv(ticker):
     """Carga datos históricos desde CSV en GitHub"""
     try:
-        # base_url = "https://raw.githubusercontent.com/jmlestevez-source/taa-dashboard/main/data/"
-        base_url = "https://raw.githubusercontent.com/josemariapv/taa-dashboard/main/data/"
+        base_url = "https://raw.githubusercontent.com/jmlestevez-source/taa-dashboard/main/data/"
         csv_url = f"{base_url}{ticker}.csv"
         # st.write(f"📥 Cargando datos históricos de {ticker} desde CSV...") # Ocultar log
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
@@ -269,7 +268,7 @@ def download_ticker_data(ticker, start, end):
                 recent_df = get_fmp_data(ticker, days=35)
             else:
                 # st.write(f"✅ Datos CSV de {ticker} son recientes, no se necesita FMP adicional.") # Ocultar log
-                combined_df = csv_df
+                combined_df = csv_df # Esta línea estaba mal indentada en tu código
             if not recent_df.empty:
                 combined_df = pd.concat([csv_df, recent_df])
                 combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
@@ -1140,23 +1139,25 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         # --- cálculo de cartera combinada ---
         try:
             # Mostrar log de señales para debugging
-            # st.subheader("📋 Log de Señales Mensuales (Debug)") # Ocultar log
-            # for s in active: # Ocultar log
-            #     st.write(f"**{s} - Señales Reales:**") # Ocultar log
-            #     if s in signals_log and signals_log[s]["real"]: # Ocultar log
-            #         signal_df = pd.DataFrame([ # Ocultar log
-            #             {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}  # Ocultar log
-            #             for sig in signals_log[s]["real"] # Ocultar log
-            #         ]) # Ocultar log
-            #         st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True) # Ocultar log
-            #     else: # Ocultar log
-            #         st.write("No hay señales disponibles") # Ocultar log
-            #     st.write(f"**{s} - Señal Hipotética Actual:**") # Ocultar log
-            #     if s in signals_log and signals_log[s]["hypothetical"]: # Ocultar log
-            #         hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {}) # Ocultar log
-            #         st.write(f"Fecha: {hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else hyp_signal[0]}") # Ocultar log
-            #         st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }") # Ocultar log
-            #     st.markdown("---") # Ocultar log
+            st.subheader("📋 Log de Señales Mensuales (Debug)")
+            for s in active:
+                st.write(f"**{s} - Señales Reales:**")
+                if s in signals_log and signals_log[s]["real"]:
+                    signal_df = pd.DataFrame([
+                        {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})} 
+                        for sig in signals_log[s]["real"]
+                    ])
+                    st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
+                else:
+                    st.write("No hay señales disponibles")
+                st.write(f"**{s} - Señal Hipotética Actual:**")
+                if s in signals_log and signals_log[s]["hypothetical"]:
+                    hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
+                    # Corrección: Convertir Timestamp a string si es necesario
+                    fecha_str = hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else str(hyp_signal[0])
+                    st.write(f"Fecha: {fecha_str}")
+                    st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
+                st.markdown("---")
             
             # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
             if len(df_filtered) < 13:
@@ -1430,6 +1431,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     # Convertir a dataframe con solo la columna de retornos
                     returns_df = pd.DataFrame({'Return': returns})
                     # Agrupar por año
+                    # Corrección: Asegurarse de que el índice sea de tipo datetime antes de usar .year
+                    returns_df.index = pd.to_datetime(returns_df.index)
                     yearly_returns = returns_df.groupby(returns_df.index.year).apply(lambda x: x['Return'].round(3))
                     # Formatear para tabla
                     table_data = []
@@ -1441,7 +1444,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         if isinstance(year_data, pd.Series):
                             # Iterar sobre cada mes
                             for month in range(1, 13):
-                                month_idx = f"{year}-{month:02d}"
+                                # Corrección: Crear el índice mensual correctamente como Timestamp
+                                month_idx = pd.Timestamp(year=year, month=month, day=1)
                                 if month_idx in returns.index:
                                     value = returns.loc[month_idx]
                                     # Formatear con signo y porcentaje
@@ -1452,7 +1456,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         else:
                             # Si no es una Serie, intentar acceder directamente
                             for month in range(1, 13):
-                                month_idx = f"{year}-{month:02d}"
+                                month_idx = pd.Timestamp(year=year, month=month, day=1)
                                 if month_idx in returns.index:
                                     value = returns.loc[month_idx]
                                     formatted_value = f"{value:+.1f}%"
@@ -1542,6 +1546,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                 # Convertir a dataframe con solo la columna de retornos
                                 returns_df = pd.DataFrame({'Return': returns})
                                 # Agrupar por año
+                                # Corrección: Asegurarse de que el índice sea de tipo datetime antes de usar .year
+                                returns_df.index = pd.to_datetime(returns_df.index)
                                 yearly_returns = returns_df.groupby(returns_df.index.year).apply(lambda x: x['Return'].round(3))
                                 # Formatear para tabla
                                 table_data = []
@@ -1553,7 +1559,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                     if isinstance(year_data, pd.Series):
                                         # Iterar sobre cada mes
                                         for month in range(1, 13):
-                                            month_idx = f"{year}-{month:02d}"
+                                            # Corrección: Crear el índice mensual correctamente como Timestamp
+                                            month_idx = pd.Timestamp(year=year, month=month, day=1)
                                             if month_idx in returns.index:
                                                 value = returns.loc[month_idx]
                                                 formatted_value = f"{value:+.1f}%"
@@ -1563,7 +1570,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                     else:
                                         # Si no es una Serie, intentar acceder directamente
                                         for month in range(1, 13):
-                                            month_idx = f"{year}-{month:02d}"
+                                            month_idx = pd.Timestamp(year=year, month=month, day=1)
                                             if month_idx in returns.index:
                                                 value = returns.loc[month_idx]
                                                 formatted_value = f"{value:+.1f}%"
