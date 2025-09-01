@@ -65,7 +65,6 @@ SISTEMA_DESCORRELACION = {
     "main": ['VTI', 'GLD', 'TLT'],
     "secondary": ['SPY', 'QQQ', 'MDY', 'EFA']
 }
-
 ALL_STRATEGIES = {
     "DAA KELLER": DAA_KELLER, 
     "Dual Momentum ROC4": DUAL_ROC4,
@@ -76,7 +75,6 @@ ALL_STRATEGIES = {
     "BAA Aggressive": BAA_AGGRESSIVE,
     "Sistema Descorrelación": SISTEMA_DESCORRELACION
 }
-
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
 # FMP API Keys
@@ -103,7 +101,7 @@ def load_from_cache(ticker, start, end):
         try:
             with open(cache_file, 'rb') as f:
                 data = pickle.load(f)
-                st.write(f"✅ {ticker} cargado desde caché")
+                # st.write(f"✅ {ticker} cargado desde caché") # Ocultar log
                 return data
         except Exception as e:
             st.warning(f"⚠️ Error cargando {ticker} desde caché: {e}")
@@ -143,14 +141,15 @@ def should_use_fmp(csv_df, days_threshold=7):
 def load_historical_data_from_csv(ticker):
     """Carga datos históricos desde CSV en GitHub"""
     try:
-        base_url = "https://raw.githubusercontent.com/jmlestevez-source/taa-dashboard/main/data/"
+        # base_url = "https://raw.githubusercontent.com/jmlestevez-source/taa-dashboard/main/data/"
+        base_url = "https://raw.githubusercontent.com/josemariapv/taa-dashboard/main/data/"
         csv_url = f"{base_url}{ticker}.csv"
-        st.write(f"📥 Cargando datos históricos de {ticker} desde CSV...")
+        # st.write(f"📥 Cargando datos históricos de {ticker} desde CSV...") # Ocultar log
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         response = requests.get(csv_url, headers=headers, timeout=30)
         if response.status_code == 200:
             csv_content = response.content.decode('utf-8')
-            lines = csv_content.strip().split('\n')
+            lines = csv_content.strip().split('\n') # Corregido el salto de línea
             if len(lines) < 4:
                 st.error(f"❌ CSV de {ticker} tiene muy pocas líneas")
                 return pd.DataFrame()
@@ -167,12 +166,12 @@ def load_historical_data_from_csv(ticker):
                             dates.append(date)
                             close_prices.append(close_price)
                         except Exception as e:
-                            st.warning(f"⚠️ Error parseando línea: {line[:50]}...")
+                            # st.warning(f"⚠️ Error parseando línea: {line[:50]}...") # Ocultar log
                             continue
             if dates and close_prices:
                 df = pd.DataFrame({ticker: close_prices}, index=dates)
                 df.index = pd.to_datetime(df.index)
-                st.write(f"✅ {ticker} cargado desde CSV - {len(df)} registros")
+                # st.write(f"✅ {ticker} cargado desde CSV - {len(df)} registros") # Ocultar log
                 return df
             else:
                 st.error(f"❌ No se pudieron parsear datos de {ticker}.csv")
@@ -201,7 +200,7 @@ def get_fmp_data(ticker, days=365*10):
                 df = df.set_index('date')
                 df = df[['close']].rename(columns={'close': ticker})
                 df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
-                st.write(f"✅ {ticker} datos históricos completos de FMP - {len(df)} registros")
+                # st.write(f"✅ {ticker} datos históricos completos de FMP - {len(df)} registros") # Ocultar log
                 return df
             else:
                 st.warning(f"⚠️ Datos vacíos de FMP para {ticker}")
@@ -225,12 +224,12 @@ def append_csv_historical_data(fmp_df, ticker):
             fmp_min_date = fmp_df.index.min()
             csv_older_data = csv_df[csv_df.index < fmp_min_date]
             if not csv_older_data.empty:
-                st.write(f"🔄 Añadiendo {len(csv_older_data)} registros históricos de CSV para {ticker} (anteriores a {fmp_min_date.strftime('%Y-%m-%d')})")
+                # st.write(f"🔄 Añadiendo {len(csv_older_data)} registros históricos de CSV para {ticker} (anteriores a {fmp_min_date.strftime('%Y-%m-%d')})") # Ocultar log
                 combined_df = pd.concat([csv_older_data, fmp_df])
                 combined_df = combined_df[~combined_df.index.duplicated(keep='last')].sort_index()
                 return combined_df
             else:
-                st.write(f"ℹ️ No hay datos históricos adicionales en CSV para {ticker}")
+                # st.write(f"ℹ️ No hay datos históricos adicionales en CSV para {ticker}") # Ocultar log
                 return fmp_df
         else:
             return fmp_df
@@ -245,10 +244,10 @@ def download_ticker_data(ticker, start, end):
     if cached_data is not None:
         return cached_data
     try:
-        st.write(f"🔄 Intentando descargar datos de FMP para {ticker}...")
+        # st.write(f"🔄 Intentando descargar datos de FMP para {ticker}...") # Ocultar log
         fmp_df = get_fmp_data(ticker, days=365*10)
         if not fmp_df.empty:
-            st.write(f"✅ Datos de FMP obtenidos para {ticker}")
+            # st.write(f"✅ Datos de FMP obtenidos para {ticker}") # Ocultar log
             fmp_df = append_csv_historical_data(fmp_df, ticker)
             fmp_df_filtered = fmp_df[(fmp_df.index >= pd.Timestamp(start)) & (fmp_df.index <= pd.Timestamp(end))]
             if not fmp_df_filtered.empty:
@@ -261,24 +260,21 @@ def download_ticker_data(ticker, start, end):
         else:
             st.warning(f"⚠️ No se pudieron obtener datos de FMP para {ticker}")
             _DOWNLOAD_ERRORS_OCCURRED = True
-
-        st.write(f"🔄 Cargando datos de CSV como fallback para {ticker}...")
+        # st.write(f"🔄 Cargando datos de CSV como fallback para {ticker}...") # Ocultar log
         csv_df = load_historical_data_from_csv(ticker)
         if not csv_df.empty:
             recent_df = pd.DataFrame()
             if should_use_fmp(csv_df):
-                st.write(f"🔄 Obteniendo datos recientes de FMP para {ticker}...")
+                # st.write(f"🔄 Obteniendo datos recientes de FMP para {ticker}...") # Ocultar log
                 recent_df = get_fmp_data(ticker, days=35)
             else:
-                st.write(f"✅ Datos CSV de {ticker} son recientes, no se necesita FMP adicional.")
-
+                # st.write(f"✅ Datos CSV de {ticker} son recientes, no se necesita FMP adicional.") # Ocultar log
             if not recent_df.empty:
                 combined_df = pd.concat([csv_df, recent_df])
                 combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
                 combined_df = combined_df.sort_index()
             else:
                 combined_df = csv_df
-
             combined_df = combined_df[(combined_df.index >= pd.Timestamp(start)) & (combined_df.index <= pd.Timestamp(end))]
             if not combined_df.empty:
                 monthly_df = combined_df.resample('ME').last()
@@ -308,7 +304,7 @@ def download_ticker_data(ticker, start, end):
 def download_all_data(tickers, start, end):
     global _DOWNLOAD_ERRORS_OCCURRED
     _DOWNLOAD_ERRORS_OCCURRED = False  # Reiniciar el indicador de errores al inicio
-    st.info("📥 Descargando datos...")
+    # st.info("📥 Descargando datos...") # Ocultar log
     data, bar = {}, st.progress(0)
     total_tickers = len(tickers)
     for idx, tk in enumerate(tickers):
@@ -1024,7 +1020,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         all_tickers_needed.update(strategy[key])
         all_tickers_needed.add("SPY")
         tickers = list(all_tickers_needed)
-        st.write(f"📊 Tickers a procesar: {tickers}")
+        # st.write(f"📊 Tickers a procesar: {tickers}") # Ocultar log
         extended_start = start_date - timedelta(days=365*3)
         extended_end = end_date + timedelta(days=30)
         extended_start_ts = pd.Timestamp(extended_start)
@@ -1034,32 +1030,29 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         # --- Mostrar estado de descarga ---
         if _DOWNLOAD_ERRORS_OCCURRED:
             st.subheader("⚠️ Detalles de Errores en la Descarga o Procesamiento:")
-            st.subheader("📊 Uso de API Keys de FMP")
-            for key, calls in FMP_CALLS.items():
-                percentage = (calls / FMP_LIMIT_PER_DAY) * 100 if FMP_LIMIT_PER_DAY > 0 else 0
-                st.write(f"Key {key[:10]}...: {calls}/{FMP_LIMIT_PER_DAY} llamadas ({percentage:.1f}%)")
+            # st.subheader("📊 Uso de API Keys de FMP") # Ocultar log
+            # for key, calls in FMP_CALLS.items(): # Ocultar log
+            #     percentage = (calls / FMP_LIMIT_PER_DAY) * 100 if FMP_LIMIT_PER_DAY > 0 else 0
+            #     st.write(f"Key {key[:10]}...: {calls}/{FMP_LIMIT_PER_DAY} llamadas ({percentage:.1f}%)") # Ocultar log
         else:
             st.success("✅ Datos extraídos y procesados correctamente")
-
+            
         if not raw:
             st.error("❌ No se pudieron obtener datos suficientes.")
             st.stop()
-        
         df = clean_and_align(raw)
         if df is None or df.empty:
             st.error("❌ No hay datos suficientes para el análisis.")
             st.stop()
-        
+            
         # --- Calcular señales antes de filtrar ---
         last_data_date = df.index.max()
         last_month_end_for_real_signal = (last_data_date - pd.DateOffset(days=last_data_date.day)).to_period('M').to_timestamp('M')
         df_up_to_last_month_end = df[df.index <= last_month_end_for_real_signal]
         df_full = df
-        
         signals_dict_last = {}
         signals_dict_current = {}
         signals_log = {}
-        
         for s in active:
             try:
                 if s == "DAA KELLER":
@@ -1116,15 +1109,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_current = weights_sistema_descorrelacion(df_full,
                                                                  ALL_STRATEGIES[s]["main"],
                                                                  ALL_STRATEGIES[s]["secondary"])
-                
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]
-                    st.write(f"📝 Señal REAL para {s}: {sig_last[-1][0].strftime('%Y-%m-%d')}")
+                    # st.write(f"📝 Señal REAL para {s}: {sig_last[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
                 else:
                     signals_dict_last[s] = {}
                 if sig_current and len(sig_current) > 0:
                     signals_dict_current[s] = sig_current[-1][1]
-                    st.write(f"📝 Señal HIPOTÉTICA para {s}: {sig_current[-1][0].strftime('%Y-%m-%d')}")
+                    # st.write(f"📝 Señal HIPOTÉTICA para {s}: {sig_current[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
                 else:
                     signals_dict_current[s] = {}
                 signals_log[s] = {
@@ -1135,7 +1127,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.error(f"Error calculando señales para {s}: {e}")
                 signals_dict_last[s] = {}
                 signals_dict_current[s] = {}
-
+                
         # Filtrar al rango de fechas del usuario
         start_date_ts = pd.Timestamp(start_date)
         end_date_ts = pd.Timestamp(end_date)
@@ -1143,33 +1135,33 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         if df_filtered.empty:
             st.error("❌ No hay datos en el rango de fechas seleccionado.")
             st.stop()
-        
+            
         # --- cálculo de cartera combinada ---
         try:
             # Mostrar log de señales para debugging
-            st.subheader("📋 Log de Señales Mensuales (Debug)")
-            for s in active:
-                st.write(f"**{s} - Señales Reales:**")
-                if s in signals_log and signals_log[s]["real"]:
-                    signal_df = pd.DataFrame([
-                        {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})} 
-                        for sig in signals_log[s]["real"]
-                    ])
-                    st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
-                else:
-                    st.write("No hay señales disponibles")
-                st.write(f"**{s} - Señal Hipotética Actual:**")
-                if s in signals_log and signals_log[s]["hypothetical"]:
-                    hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
-                    st.write(f"Fecha: {hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else hyp_signal[0]}")
-                    st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
-                st.markdown("---")
-
+            # st.subheader("📋 Log de Señales Mensuales (Debug)") # Ocultar log
+            # for s in active: # Ocultar log
+            #     st.write(f"**{s} - Señales Reales:**") # Ocultar log
+            #     if s in signals_log and signals_log[s]["real"]: # Ocultar log
+            #         signal_df = pd.DataFrame([ # Ocultar log
+            #             {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}  # Ocultar log
+            #             for sig in signals_log[s]["real"] # Ocultar log
+            #         ]) # Ocultar log
+            #         st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True) # Ocultar log
+            #     else: # Ocultar log
+            #         st.write("No hay señales disponibles") # Ocultar log
+            #     st.write(f"**{s} - Señal Hipotética Actual:**") # Ocultar log
+            #     if s in signals_log and signals_log[s]["hypothetical"]: # Ocultar log
+            #         hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {}) # Ocultar log
+            #         st.write(f"Fecha: {hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else hyp_signal[0]}") # Ocultar log
+            #         st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }") # Ocultar log
+            #     st.markdown("---") # Ocultar log
+            
             # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
             if len(df_filtered) < 13:
                 st.error("❌ No hay suficientes datos en el rango filtrado.")
                 st.stop()
-
+                
             # 1. Calcular todas las señales para todo el período filtrado
             strategy_signals = {}
             for s in active:
@@ -1204,27 +1196,25 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     strategy_signals[s] = weights_sistema_descorrelacion(df_filtered,
                                                                        ALL_STRATEGIES[s]["main"],
                                                                        ALL_STRATEGIES[s]["secondary"])
-
+                                                                       
             # 2. Preparar estructura para la cartera combinada
             rebalance_dates = [sig[0] for sig in strategy_signals[active[0]]] if active and strategy_signals.get(active[0]) else []
             if not rebalance_dates:
                  st.error("❌ No se pudieron calcular fechas de rebalanceo.")
                  st.stop()
-
+                 
             # 3. Calcular retornos mensuales
             df_returns = df_filtered.pct_change().fillna(0)
-
+            
             # 4. Calcular curva de equity combinada
             portfolio_values = [initial_capital]
             portfolio_dates = [df_filtered.index[0]]
-            
             for i in range(len(rebalance_dates)):
                 start_hold_date = rebalance_dates[i]
                 end_hold_date = rebalance_dates[i+1] if i+1 < len(rebalance_dates) else df_filtered.index[-1] + pd.DateOffset(days=1)
                 start_hold_date = max(start_hold_date, df_filtered.index[0])
                 end_hold_date = min(end_hold_date, df_filtered.index[-1] + pd.DateOffset(days=1))
                 period_returns = df_returns[(df_returns.index >= start_hold_date) & (df_returns.index < end_hold_date)]
-                
                 combined_weights = {}
                 for s in active:
                     signal_for_period = {}
@@ -1240,7 +1230,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                        break
                     for ticker, weight in signal_for_period.items():
                         combined_weights[ticker] = combined_weights.get(ticker, 0) + weight / len(active)
-                
                 for idx, (date, row) in enumerate(period_returns.iterrows()):
                     portfolio_return = 0
                     for ticker, weight in combined_weights.items():
@@ -1249,10 +1238,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     new_value = portfolio_values[-1] * (1 + portfolio_return)
                     portfolio_values.append(new_value)
                     portfolio_dates.append(date)
-
             comb_series_raw = pd.Series(portfolio_values, index=portfolio_dates)
             comb_series = comb_series_raw[~comb_series_raw.index.duplicated(keep='last')].sort_index()
-
+            
             # --- Crear SPY benchmark ---
             if "SPY" in df_filtered.columns:
                 spy_prices = df_filtered["SPY"]
@@ -1276,7 +1264,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                 else:
                     spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
-
+                    
             met_comb = calc_metrics(comb_series.pct_change().dropna())
             met_spy = calc_metrics(spy_series.pct_change().dropna())
             st.success("✅ Cálculos completados")
@@ -1285,7 +1273,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             import traceback
             st.text(traceback.format_exc())
             st.stop()
-
+            
         # --- cálculo de series individuales ---
         ind_series = {}
         ind_metrics = {}
@@ -1322,7 +1310,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      sig_list = weights_sistema_descorrelacion(df_filtered,
                                                              ALL_STRATEGIES[s]["main"],
                                                              ALL_STRATEGIES[s]["secondary"])
-                 
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
                  signals_dict_ind = {sig[0]: sig[1] for sig in sig_list}
                  if not rebalance_dates_ind:
@@ -1330,7 +1317,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                       ind_series[s] = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                       ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
                       continue
-
                  eq_values = [initial_capital]
                  eq_dates = [df_filtered.index[0]]
                  for i in range(len(rebalance_dates_ind)):
@@ -1348,7 +1334,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                          new_value_ind = eq_values[-1] * (1 + portfolio_return_ind)
                          eq_values.append(new_value_ind)
                          eq_dates.append(date)
-
                  ser_raw = pd.Series(eq_values, index=eq_dates)
                  ser = ser_raw[~ser_raw.index.duplicated(keep='last')].sort_index()
                  ser = ser.reindex(comb_series.index, method='pad').fillna(method='bfill')
@@ -1358,7 +1343,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.error(f"Error calculando serie para {s}: {e}")
                 ind_series[s] = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                 ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
-
+                
         # ---------- MOSTRAR RESULTADOS ----------
         try:
             tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
@@ -1380,7 +1365,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.subheader("🎯 Señal Cartera Combinada")
                 st.write(f"📊 Datos disponibles: {df.index.min().strftime('%Y-%m-%d')} a {df.index.max().strftime('%Y-%m-%d')}")
                 st.write(f"🗓️ Señal REAL calculada con datos hasta: {last_month_end_for_real_signal.strftime('%Y-%m-%d')}")
-                
                 combined_last = {}
                 combined_current = {}
                 for s in active:
@@ -1390,7 +1374,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         combined_last[t] = combined_last.get(t, 0) + w / len(active)
                     for t, w in current_sig.items():
                         combined_current[t] = combined_current.get(t, 0) + w / len(active)
-                
                 col1, col2 = st.columns(2)
                 with col1:
                     st.write("**Última (Real):**")
@@ -1398,7 +1381,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 with col2:
                     st.write("**Actual (Hipotética):**")
                     st.dataframe(format_signal_for_display(combined_current), use_container_width=True, hide_index=True)
-                
+                    
                 # Gráficos
                 st.subheader("📈 Equity Curve")
                 fig = go.Figure()
@@ -1430,16 +1413,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     for s in active:
                         if s in ind_series:
                              corr_data[s] = ind_series[s].pct_change().dropna()
-                    
                     aligned_data = pd.DataFrame()
                     for name, series in corr_data.items():
                         aligned_data[name] = series
-                    
                     corr_matrix = aligned_data.corr()
                     st.dataframe(corr_matrix.round(3), use_container_width=True)
                 except Exception as e:
                     st.warning(f"No se pudieron calcular las correlaciones: {e}")
-                
+                    
                 # NUEVA: Tabla de retornos mensuales
                 st.subheader("📅 Retornos Mensuales por Año")
                 try:
@@ -1478,11 +1459,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                 else:
                                     row.append("")
                         table_data.append(row)
-                    
                     # Crear DataFrame para la tabla
                     columns = ['Año'] + [f"{i:02d}" for i in range(1, 13)]
                     df_table = pd.DataFrame(table_data, columns=columns)
-                    
                     # Aplicar estilos condicionales
                     def color_cells(val):
                         if val == "":
@@ -1501,13 +1480,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                 return 'background-color: white; color: black;'
                         except:
                             return 'background-color: white; color: black;'
-                    
                     # Aplicar estilos
                     styled_table = df_table.style.applymap(color_cells)
                     st.dataframe(styled_table, use_container_width=True)
                 except Exception as e:
                     st.warning(f"No se pudo generar la tabla de retornos mensuales: {e}")
-            
+                    
             # ---- TABS INDIVIDUALES ----
             for idx, s in enumerate(active, start=1):
                 try:
@@ -1523,7 +1501,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             with col2:
                                 st.metric("Sharpe", met["Sharpe"])
                                 st.metric("Vol", f"{met['Vol']} %")
-                            
+                                
                             # Mostrar señales individuales
                             st.subheader("🎯 Señales")
                             col1, col2 = st.columns(2)
@@ -1533,7 +1511,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             with col2:
                                 st.write("**Actual (Hipotética):**")
                                 st.dataframe(format_signal_for_display(signals_dict_current.get(s, {})), use_container_width=True, hide_index=True)
-                            
+                                
                             # Gráficos individuales
                             st.subheader("📈 Equity Curve")
                             fig = go.Figure()
@@ -1592,11 +1570,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                             else:
                                                 row.append("")
                                     table_data.append(row)
-                                
                                 # Crear DataFrame para la tabla
                                 columns = ['Año'] + [f"{i:02d}" for i in range(1, 13)]
                                 df_table = pd.DataFrame(table_data, columns=columns)
-                                
                                 # Aplicar estilos condicionales
                                 def color_cells(val):
                                     if val == "":
@@ -1615,7 +1591,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                             return 'background-color: white; color: black;'
                                     except:
                                         return 'background-color: white; color: black;'
-                                
                                 # Aplicar estilos
                                 styled_table = df_table.style.applymap(color_cells)
                                 st.dataframe(styled_table, use_container_width=True)
