@@ -268,7 +268,7 @@ def download_ticker_data(ticker, start, end):
                 recent_df = get_fmp_data(ticker, days=35)
             else:
                 # st.write(f"✅ Datos CSV de {ticker} son recientes, no se necesita FMP adicional.") # Ocultar log
-                combined_df = csv_df # Esta línea estaba mal indentada en tu código
+                combined_df = csv_df # Corrección de indentación
             if not recent_df.empty:
                 combined_df = pd.concat([csv_df, recent_df])
                 combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
@@ -1428,68 +1428,84 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 try:
                     # Obtener retornos mensuales para la cartera combinada
                     returns = comb_series.pct_change().dropna()
-                    # Convertir a dataframe con solo la columna de retornos
-                    returns_df = pd.DataFrame({'Return': returns})
-                    # Agrupar por año
-                    # Corrección: Asegurarse de que el índice sea de tipo datetime antes de usar .year
-                    returns_df.index = pd.to_datetime(returns_df.index)
-                    yearly_returns = returns_df.groupby(returns_df.index.year).apply(lambda x: x['Return'].round(3))
-                    # Formatear para tabla
-                    table_data = []
-                    for year in yearly_returns.index:
-                        row = [year]
-                        # Obtener todos los retornos del año
-                        year_data = yearly_returns.loc[year]
-                        # Asegurar que sea una Serie (no un DataFrame)
-                        if isinstance(year_data, pd.Series):
-                            # Iterar sobre cada mes
+                    if not returns.empty:
+                        # Asegurarse de que el índice sea de tipo datetime
+                        returns.index = pd.to_datetime(returns.index)
+                        # Crear un DataFrame con los retornos y una columna auxiliar para el año
+                        returns_df = pd.DataFrame({'Return': returns, 'Year': returns.index.year})
+                        # Agrupar por año
+                        yearly_groups = returns_df.groupby('Year')
+                        
+                        # Formatear para tabla
+                        table_data = []
+                        all_years = sorted(yearly_groups.groups.keys())
+                        # Generar encabezados de meses (01, 02, ..., 12)
+                        month_columns = [f"{i:02d}" for i in range(1, 13)]
+                        
+                        for year in all_years:
+                            # Inicializar la fila con el año
+                            row = [year]
+                            # Obtener los datos de retornos para este año
+                            year_data = yearly_groups.get_group(year)
+                            
+                            # Crear un diccionario para acceder rápidamente a los retornos por mes
+                            # Usamos el número del mes (1-12) como clave
+                            monthly_returns_for_year = {row_index.month: row_data['Return'] for row_index, row_data in year_data.iterrows()}
+                            
+                            # Iterar sobre cada mes (1 a 12)
                             for month in range(1, 13):
-                                # Corrección: Crear el índice mensual correctamente como Timestamp
-                                month_idx = pd.Timestamp(year=year, month=month, day=1)
-                                if month_idx in returns.index:
-                                    value = returns.loc[month_idx]
+                                if month in monthly_returns_for_year:
+                                    value = monthly_returns_for_year[month]
                                     # Formatear con signo y porcentaje
                                     formatted_value = f"{value:+.1f}%"
                                     row.append(formatted_value)
                                 else:
+                                    # Si no hay dato para ese mes, dejar celda vacía
                                     row.append("")
-                        else:
-                            # Si no es una Serie, intentar acceder directamente
-                            for month in range(1, 13):
-                                month_idx = pd.Timestamp(year=year, month=month, day=1)
-                                if month_idx in returns.index:
-                                    value = returns.loc[month_idx]
-                                    formatted_value = f"{value:+.1f}%"
-                                    row.append(formatted_value)
-                                else:
-                                    row.append("")
-                        table_data.append(row)
-                    # Crear DataFrame para la tabla
-                    columns = ['Año'] + [f"{i:02d}" for i in range(1, 13)]
-                    df_table = pd.DataFrame(table_data, columns=columns)
-                    # Aplicar estilos condicionales
-                    def color_cells(val):
-                        if val == "":
-                            return 'background-color: white; color: black;'
-                        try:
-                            # Extraer el número de la cadena de texto
-                            num = float(val.replace('%', '').replace('+', ''))
-                            if num > 0:
-                                # Verde claro para positivo
-                                return f'background-color: rgba(144, 238, 144, 0.5); color: black;'
-                            elif num < 0:
-                                # Rojo claro para negativo
-                                return f'background-color: rgba(255, 182, 193, 0.5); color: black;'
-                            else:
-                                # Blanco para cero
+                            table_data.append(row)
+                        
+                        # Crear DataFrame para la tabla
+                        columns = ['Año'] + month_columns
+                        df_table = pd.DataFrame(table_data, columns=columns)
+                        
+                        # Aplicar estilos condicionales
+                        def color_cells(val):
+                            if val == "":
                                 return 'background-color: white; color: black;'
-                        except:
-                            return 'background-color: white; color: black;'
-                    # Aplicar estilos
-                    styled_table = df_table.style.applymap(color_cells)
-                    st.dataframe(styled_table, use_container_width=True)
+                            try:
+                                # Extraer el número de la cadena de texto
+                                num_str = val.replace('%', '').replace('+', '')
+                                if num_str.startswith('-'):
+                                    sign = -1
+                                    num_str = num_str[1:]
+                                else:
+                                    sign = 1
+                                num = sign * float(num_str)
+                                if num > 0:
+                                    # Verde claro para positivo
+                                    return f'background-color: rgba(144, 238, 144, 0.5); color: black;'
+                                elif num < 0:
+                                    # Rojo claro para negativo
+                                    return f'background-color: rgba(255, 182, 193, 0.5); color: black;'
+                                else:
+                                    # Blanco para cero
+                                    return 'background-color: white; color: black;'
+                            except ValueError:
+                                # En caso de error de conversión, celda normal
+                                return 'background-color: white; color: black;'
+                            except Exception:
+                                return 'background-color: white; color: black;'
+                        
+                        # Aplicar estilos
+                        styled_table = df_table.style.applymap(color_cells)
+                        st.dataframe(styled_table, use_container_width=True)
+                    else:
+                        st.info("No hay datos de retornos para mostrar.")
                 except Exception as e:
                     st.warning(f"No se pudo generar la tabla de retornos mensuales: {e}")
+                    # Opcional: Mostrar el traceback completo para depuración
+                    # import traceback
+                    # st.text(traceback.format_exc())
                     
             # ---- TABS INDIVIDUALES ----
             for idx, s in enumerate(active, start=1):
@@ -1543,67 +1559,84 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             try:
                                 # Obtener retornos mensuales para esta estrategia
                                 returns = ser.pct_change().dropna()
-                                # Convertir a dataframe con solo la columna de retornos
-                                returns_df = pd.DataFrame({'Return': returns})
-                                # Agrupar por año
-                                # Corrección: Asegurarse de que el índice sea de tipo datetime antes de usar .year
-                                returns_df.index = pd.to_datetime(returns_df.index)
-                                yearly_returns = returns_df.groupby(returns_df.index.year).apply(lambda x: x['Return'].round(3))
-                                # Formatear para tabla
-                                table_data = []
-                                for year in yearly_returns.index:
-                                    row = [year]
-                                    # Obtener todos los retornos del año
-                                    year_data = yearly_returns.loc[year]
-                                    # Asegurar que sea una Serie
-                                    if isinstance(year_data, pd.Series):
-                                        # Iterar sobre cada mes
+                                if not returns.empty:
+                                    # Asegurarse de que el índice sea de tipo datetime
+                                    returns.index = pd.to_datetime(returns.index)
+                                    # Crear un DataFrame con los retornos y una columna auxiliar para el año
+                                    returns_df = pd.DataFrame({'Return': returns, 'Year': returns.index.year})
+                                    # Agrupar por año
+                                    yearly_groups = returns_df.groupby('Year')
+                                    
+                                    # Formatear para tabla
+                                    table_data = []
+                                    all_years = sorted(yearly_groups.groups.keys())
+                                    # Generar encabezados de meses (01, 02, ..., 12)
+                                    month_columns = [f"{i:02d}" for i in range(1, 13)]
+                                    
+                                    for year in all_years:
+                                        # Inicializar la fila con el año
+                                        row = [year]
+                                        # Obtener los datos de retornos para este año
+                                        year_data = yearly_groups.get_group(year)
+                                        
+                                        # Crear un diccionario para acceder rápidamente a los retornos por mes
+                                        # Usamos el número del mes (1-12) como clave
+                                        monthly_returns_for_year = {row_index.month: row_data['Return'] for row_index, row_data in year_data.iterrows()}
+                                        
+                                        # Iterar sobre cada mes (1 a 12)
                                         for month in range(1, 13):
-                                            # Corrección: Crear el índice mensual correctamente como Timestamp
-                                            month_idx = pd.Timestamp(year=year, month=month, day=1)
-                                            if month_idx in returns.index:
-                                                value = returns.loc[month_idx]
+                                            if month in monthly_returns_for_year:
+                                                value = monthly_returns_for_year[month]
+                                                # Formatear con signo y porcentaje
                                                 formatted_value = f"{value:+.1f}%"
                                                 row.append(formatted_value)
                                             else:
+                                                # Si no hay dato para ese mes, dejar celda vacía
                                                 row.append("")
-                                    else:
-                                        # Si no es una Serie, intentar acceder directamente
-                                        for month in range(1, 13):
-                                            month_idx = pd.Timestamp(year=year, month=month, day=1)
-                                            if month_idx in returns.index:
-                                                value = returns.loc[month_idx]
-                                                formatted_value = f"{value:+.1f}%"
-                                                row.append(formatted_value)
-                                            else:
-                                                row.append("")
-                                    table_data.append(row)
-                                # Crear DataFrame para la tabla
-                                columns = ['Año'] + [f"{i:02d}" for i in range(1, 13)]
-                                df_table = pd.DataFrame(table_data, columns=columns)
-                                # Aplicar estilos condicionales
-                                def color_cells(val):
-                                    if val == "":
-                                        return 'background-color: white; color: black;'
-                                    try:
-                                        # Extraer el número de la cadena de texto
-                                        num = float(val.replace('%', '').replace('+', ''))
-                                        if num > 0:
-                                            # Verde claro para positivo
-                                            return f'background-color: rgba(144, 238, 144, 0.5); color: black;'
-                                        elif num < 0:
-                                            # Rojo claro para negativo
-                                            return f'background-color: rgba(255, 182, 193, 0.5); color: black;'
-                                        else:
-                                            # Blanco para cero
+                                        table_data.append(row)
+                                    
+                                    # Crear DataFrame para la tabla
+                                    columns = ['Año'] + month_columns
+                                    df_table = pd.DataFrame(table_data, columns=columns)
+                                    
+                                    # Aplicar estilos condicionales (misma función que antes)
+                                    def color_cells(val):
+                                        if val == "":
                                             return 'background-color: white; color: black;'
-                                    except:
-                                        return 'background-color: white; color: black;'
-                                # Aplicar estilos
-                                styled_table = df_table.style.applymap(color_cells)
-                                st.dataframe(styled_table, use_container_width=True)
+                                        try:
+                                            # Extraer el número de la cadena de texto
+                                            num_str = val.replace('%', '').replace('+', '')
+                                            if num_str.startswith('-'):
+                                                sign = -1
+                                                num_str = num_str[1:]
+                                            else:
+                                                sign = 1
+                                            num = sign * float(num_str)
+                                            if num > 0:
+                                                # Verde claro para positivo
+                                                return f'background-color: rgba(144, 238, 144, 0.5); color: black;'
+                                            elif num < 0:
+                                                # Rojo claro para negativo
+                                                return f'background-color: rgba(255, 182, 193, 0.5); color: black;'
+                                            else:
+                                                # Blanco para cero
+                                                return 'background-color: white; color: black;'
+                                        except ValueError:
+                                            # En caso de error de conversión, celda normal
+                                            return 'background-color: white; color: black;'
+                                        except Exception:
+                                            return 'background-color: white; color: black;'
+                                    
+                                    # Aplicar estilos
+                                    styled_table = df_table.style.applymap(color_cells)
+                                    st.dataframe(styled_table, use_container_width=True)
+                                else:
+                                    st.info("No hay datos de retornos para mostrar.")
                             except Exception as e:
                                 st.warning(f"No se pudo generar la tabla de retornos mensuales para {s}: {e}")
+                                # Opcional: Mostrar el traceback completo para depuración
+                                # import traceback
+                                # st.text(traceback.format_exc())
                         else:
                             st.write("No hay datos disponibles para esta estrategia.")
                 except Exception as e:
