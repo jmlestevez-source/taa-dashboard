@@ -12,6 +12,9 @@ import pickle
 import hashlib
 from io import StringIO
 
+# Nueva importación para yfinance
+import yfinance as yf
+
 # ------------- CONFIG -------------
 st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
 st.title("🎯 Multi-Strategy Tactical Asset Allocation")
@@ -65,16 +68,24 @@ SISTEMA_DESCORRELACION = {
     "main": ['VTI', 'GLD', 'TLT'],
     "secondary": ['SPY', 'QQQ', 'MDY', 'EFA']
 }
+
+# Nueva estrategia: Sistema Factores (con ticker corregido)
+SISTEMA_FACTORES = {
+    "tickers": ['IS3S.DE', 'IS3Q.DE', 'IS3R.DE', 'IQQ0.DE', 'IBCZ.DE', 'VGWE.DE', 'WTEM.DE', 'IUSM.DE'] # VGWE.DE corregido
+}
+
 ALL_STRATEGIES = {
-    "DAA KELLER": DAA_KELLER, 
+    "DAA KELLER": DAA_KELLER,
     "Dual Momentum ROC4": DUAL_ROC4,
     "Accelerated Dual Momentum": ACCEL_DUAL_MOM,
     "VAA-12": VAA_12,
     "Composite Dual Momentum": COMPOSITE_DUAL_MOM,
     "Quint Switching Filtered": QUINT_SWITCHING_FILTERED,
     "BAA Aggressive": BAA_AGGRESSIVE,
-    "Sistema Descorrelación": SISTEMA_DESCORRELACION
+    "Sistema Descorrelación": SISTEMA_DESCORRELACION,
+    "Sistema Factores": SISTEMA_FACTORES # Añadida la nueva estrategia
 }
+
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
 # FMP API Keys
@@ -124,9 +135,48 @@ def get_available_fmp_key():
     st.warning("⚠️ Todas las API keys de FMP han alcanzado el límite diario.")
     return min(FMP_KEYS, key=lambda k: FMP_CALLS[k])
 
-# ------------- DESCARGA (Solo CSV desde GitHub + FMP) -------------
+# ------------- DESCARGA (Solo CSV desde GitHub + FMP + yfinance para Sistema Factores) -------------
 # Variable global para rastrear errores durante la descarga
 _DOWNLOAD_ERRORS_OCCURRED = False
+
+# --- NUEVA FUNCIÓN PARA DESCARGAR DATOS DE SISTEMA FACTORES CON YFINANCE ---
+def get_yfinance_data(tickers, start, end):
+    """Descarga datos usando yfinance para una lista de tickers"""
+    global _DOWNLOAD_ERRORS_OCCURRED
+    data = {}
+    bar = st.progress(0)
+    total_tickers = len(tickers)
+    for idx, ticker in enumerate(tickers):
+        try:
+            bar.progress((idx + 1) / total_tickers)
+            # st.write(f"🔄 Descargando {ticker} desde yfinance...") # Ocultar log
+            # Asegurarse de que las fechas sean datetime.date
+            if isinstance(start, pd.Timestamp):
+                start = start.date()
+            if isinstance(end, pd.Timestamp):
+                end = end.date()
+            
+            # Descargar datos
+            df = yf.download(ticker, start=start, end=end, progress=False)
+            
+            if df is not None and not df.empty:
+                # Seleccionar la columna 'Close' y renombrarla
+                close_series = df['Close'].rename(ticker)
+                # Convertir a DataFrame
+                df_final = close_series.to_frame()
+                # Asegurar que el índice sea datetime
+                df_final.index = pd.to_datetime(df_final.index)
+                # Guardar en el diccionario
+                data[ticker] = df_final
+                # st.write(f"✅ {ticker} descargado desde yfinance - {len(df_final)} registros") # Ocultar log
+            else:
+                st.warning(f"⚠️ No se obtuvieron datos para {ticker} desde yfinance")
+                _DOWNLOAD_ERRORS_OCCURRED = True
+        except Exception as e:
+            st.error(f"❌ Error descargando {ticker} desde yfinance: {e}")
+            _DOWNLOAD_ERRORS_OCCURRED = True
+    bar.empty()
+    return data
 
 def should_use_fmp(csv_df, days_threshold=7):
     """Verifica si es necesario usar FMP basado en la frescura de los datos CSV"""
@@ -305,21 +355,38 @@ def download_all_data(tickers, start, end):
     global _DOWNLOAD_ERRORS_OCCURRED
     _DOWNLOAD_ERRORS_OCCURRED = False  # Reiniciar el indicador de errores al inicio
     # st.info("📥 Descargando datos...") # Ocultar log
-    data, bar = {}, st.progress(0)
-    total_tickers = len(tickers)
-    for idx, tk in enumerate(tickers):
-        try:
-            bar.progress((idx + 1) / total_tickers)
-            df = download_ticker_data(tk, start, end)
-            if not df.empty and len(df) > 0:
-                data[tk] = df
-            else:
-                st.warning(f"⚠️ {tk} no disponible")
+    data = {}
+    
+    # Identificar tickers del Sistema Factores
+    sistema_factores_tickers = SISTEMA_FACTORES.get("tickers", [])
+    tickers_para_yfinance = [t for t in tickers if t in sistema_factores_tickers]
+    tickers_para_fmp_csv = [t for t in tickers if t not in sistema_factores_tickers]
+    
+    # Descargar tickers del Sistema Factores con yfinance
+    if tickers_para_yfinance:
+        st.info("📥 Descargando datos de Sistema Factores desde yfinance...")
+        yfinance_data = get_yfinance_data(tickers_para_yfinance, start, end)
+        data.update(yfinance_data)
+        
+    # Descargar el resto de tickers con el método original (FMP + CSV)
+    if tickers_para_fmp_csv:
+        st.info("📥 Descargando datos restantes desde FMP y CSV...")
+        bar = st.progress(0)
+        total_tickers_fmp = len(tickers_para_fmp_csv)
+        for idx, tk in enumerate(tickers_para_fmp_csv):
+            try:
+                bar.progress((idx + 1) / total_tickers_fmp)
+                df = download_ticker_data(tk, start, end)
+                if not df.empty and len(df) > 0:
+                    data[tk] = df
+                else:
+                    st.warning(f"⚠️ {tk} no disponible")
+                    _DOWNLOAD_ERRORS_OCCURRED = True
+            except Exception as e:
+                st.error(f"❌ Error procesando {tk}: {e}")
                 _DOWNLOAD_ERRORS_OCCURRED = True
-        except Exception as e:
-            st.error(f"❌ Error procesando {tk}: {e}")
-            _DOWNLOAD_ERRORS_OCCURRED = True
-    bar.empty()
+        bar.empty()
+        
     return data
 
 def clean_and_align(data_dict):
@@ -976,6 +1043,69 @@ def weights_sistema_descorrelacion(df, main, secondary):
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
+# Nueva función para Sistema Factores
+def weights_sistema_factores(df, tickers):
+    """Calcula señales para Sistema Factores"""
+    if len(df) < 13: # Necesita al menos 13 meses para ROC 12
+        return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+    sig = []
+    for i in range(13, len(df)):
+        try:
+            df_subset = df.iloc[:i]
+            # Calcular ROC 6 y ROC 12 para cada ticker
+            roc6_scores = {s: roc_6(df_subset, s) for s in tickers if s in df_subset.columns}
+            roc12_scores = {s: roc_12(df_subset, s) for s in tickers if s in df_subset.columns}
+            # Calcular promedio de ROC 6 y ROC 12
+            avg_scores = {}
+            for ticker in tickers:
+                if ticker in roc6_scores and ticker in roc12_scores:
+                    roc6_val = roc6_scores[ticker]
+                    roc12_val = roc12_scores[ticker]
+                    # Solo considerar si ambos ROC son números válidos
+                    if not (np.isinf(roc6_val) or np.isinf(roc12_val) or np.isnan(roc6_val) or np.isnan(roc12_val)):
+                        avg_scores[ticker] = (roc6_val + roc12_val) / 2
+            # Seleccionar los dos mejores con promedio positivo
+            # Filtrar los que tienen promedio positivo
+            positive_avg_scores = {k: v for k, v in avg_scores.items() if v > 0}
+            # Ordenar por promedio descendente y tomar los dos primeros
+            sorted_tickers = sorted(positive_avg_scores.items(), key=lambda item: item[1], reverse=True)
+            top_2 = sorted_tickers[:2]
+            w = {}
+            if top_2:
+                # Asignar 50% a cada uno de los dos seleccionados
+                for ticker, _ in top_2:
+                    w[ticker] = 0.5
+            # Si hay menos de 2 positivos, el resto se queda en efectivo (peso 0 en activos)
+            sig.append((df.index[i], w))
+        except Exception as e:
+            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
+    # Calcular señal para el último periodo
+    if len(df) >= 13:
+        try:
+            df_subset = df
+            roc6_scores = {s: roc_6(df_subset, s) for s in tickers if s in df_subset.columns}
+            roc12_scores = {s: roc_12(df_subset, s) for s in tickers if s in df_subset.columns}
+            avg_scores = {}
+            for ticker in tickers:
+                if ticker in roc6_scores and ticker in roc12_scores:
+                    roc6_val = roc6_scores[ticker]
+                    roc12_val = roc12_scores[ticker]
+                    if not (np.isinf(roc6_val) or np.isinf(roc12_val) or np.isnan(roc6_val) or np.isnan(roc12_val)):
+                        avg_scores[ticker] = (roc6_val + roc12_val) / 2
+            positive_avg_scores = {k: v for k, v in avg_scores.items() if v > 0}
+            sorted_tickers = sorted(positive_avg_scores.items(), key=lambda item: item[1], reverse=True)
+            top_2 = sorted_tickers[:2]
+            w = {}
+            if top_2:
+                for ticker, _ in top_2:
+                    w[ticker] = 0.5
+            sig.append((df.index[-1], w))
+        except Exception as e:
+            sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
+    sig = list({s[0]: s for s in sig}.values())
+    return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
+
+
 def format_signal_for_display(signal_dict):
     """Formatea un diccionario de señal para mostrarlo como tabla"""
     if not signal_dict:
@@ -1014,6 +1144,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             elif s == "Sistema Descorrelación":
                 all_tickers_needed.update(strategy["main"])
                 all_tickers_needed.update(strategy["secondary"])
+            elif s == "Sistema Factores": # Manejo de la nueva estrategia
+                all_tickers_needed.update(strategy["tickers"])
             else:
                 for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective", "safe"]:
                     if key in strategy:
@@ -1026,7 +1158,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         extended_start_ts = pd.Timestamp(extended_start)
         extended_end_ts = pd.Timestamp(extended_end)
         raw = download_all_data(tickers, extended_start_ts, extended_end_ts)
-        
         # --- Mostrar estado de descarga ---
         if _DOWNLOAD_ERRORS_OCCURRED:
             st.subheader("⚠️ Detalles de Errores en la Descarga o Procesamiento:")
@@ -1036,7 +1167,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             #     st.write(f"Key {key[:10]}...: {calls}/{FMP_LIMIT_PER_DAY} llamadas ({percentage:.1f}%)") # Ocultar log
         else:
             st.success("✅ Datos extraídos y procesados correctamente")
-            
         if not raw:
             st.error("❌ No se pudieron obtener datos suficientes.")
             st.stop()
@@ -1044,7 +1174,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         if df is None or df.empty:
             st.error("❌ No hay datos suficientes para el análisis.")
             st.stop()
-            
         # --- Calcular señales antes de filtrar ---
         last_data_date = df.index.max()
         last_month_end_for_real_signal = (last_data_date - pd.DateOffset(days=last_data_date.day)).to_period('M').to_timestamp('M')
@@ -1059,7 +1188,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_last = weights_daa(df_up_to_last_month_end, **ALL_STRATEGIES[s])
                     sig_current = weights_daa(df_full, **ALL_STRATEGIES[s])
                 elif s == "Dual Momentum ROC4":
-                    sig_last = weights_roc4(df_up_to_last_month_end, 
+                    sig_last = weights_roc4(df_up_to_last_month_end,
                                           ALL_STRATEGIES[s]["universe"],
                                           ALL_STRATEGIES[s]["fill"])
                     sig_current = weights_roc4(df_full,
@@ -1109,6 +1238,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_current = weights_sistema_descorrelacion(df_full,
                                                                  ALL_STRATEGIES[s]["main"],
                                                                  ALL_STRATEGIES[s]["secondary"])
+                elif s == "Sistema Factores": # Integración de la nueva estrategia
+                    sig_last = weights_sistema_factores(df_up_to_last_month_end,
+                                                        ALL_STRATEGIES[s]["tickers"])
+                    sig_current = weights_sistema_factores(df_full,
+                                                           ALL_STRATEGIES[s]["tickers"])
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]
                     # st.write(f"📝 Señal REAL para {s}: {sig_last[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
@@ -1127,7 +1261,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.error(f"Error calculando señales para {s}: {e}")
                 signals_dict_last[s] = {}
                 signals_dict_current[s] = {}
-                
         # Filtrar al rango de fechas del usuario
         start_date_ts = pd.Timestamp(start_date)
         end_date_ts = pd.Timestamp(end_date)
@@ -1135,7 +1268,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         if df_filtered.empty:
             st.error("❌ No hay datos en el rango de fechas seleccionado.")
             st.stop()
-            
         # --- cálculo de cartera combinada ---
         try:
             # Mostrar log de señales para debugging
@@ -1144,7 +1276,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.write(f"**{s} - Señales Reales:**")
                 if s in signals_log and signals_log[s]["real"]:
                     signal_df = pd.DataFrame([
-                        {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})} 
+                        {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}
                         for sig in signals_log[s]["real"]
                     ])
                     st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
@@ -1158,12 +1290,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     st.write(f"Fecha: {fecha_str}")
                     st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
                 st.markdown("---")
-            
             # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
             if len(df_filtered) < 13:
                 st.error("❌ No hay suficientes datos en el rango filtrado.")
                 st.stop()
-                
             # 1. Calcular todas las señales para todo el período filtrado
             strategy_signals = {}
             for s in active:
@@ -1198,16 +1328,16 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     strategy_signals[s] = weights_sistema_descorrelacion(df_filtered,
                                                                        ALL_STRATEGIES[s]["main"],
                                                                        ALL_STRATEGIES[s]["secondary"])
-                                                                       
+                elif s == "Sistema Factores": # Integración de la nueva estrategia
+                    strategy_signals[s] = weights_sistema_factores(df_filtered,
+                                                                   ALL_STRATEGIES[s]["tickers"])
             # 2. Preparar estructura para la cartera combinada
             rebalance_dates = [sig[0] for sig in strategy_signals[active[0]]] if active and strategy_signals.get(active[0]) else []
             if not rebalance_dates:
                  st.error("❌ No se pudieron calcular fechas de rebalanceo.")
                  st.stop()
-                 
             # 3. Calcular retornos mensuales
             df_returns = df_filtered.pct_change().fillna(0)
-            
             # 4. Calcular curva de equity combinada
             portfolio_values = [initial_capital]
             portfolio_dates = [df_filtered.index[0]]
@@ -1242,7 +1372,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     portfolio_dates.append(date)
             comb_series_raw = pd.Series(portfolio_values, index=portfolio_dates)
             comb_series = comb_series_raw[~comb_series_raw.index.duplicated(keep='last')].sort_index()
-            
             # --- Crear SPY benchmark ---
             if "SPY" in df_filtered.columns:
                 spy_prices = df_filtered["SPY"]
@@ -1266,7 +1395,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                 else:
                     spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
-                    
             met_comb = calc_metrics(comb_series.pct_change().dropna())
             met_spy = calc_metrics(spy_series.pct_change().dropna())
             st.success("✅ Cálculos completados")
@@ -1275,7 +1403,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             import traceback
             st.text(traceback.format_exc())
             st.stop()
-            
         # --- cálculo de series individuales ---
         ind_series = {}
         ind_metrics = {}
@@ -1312,6 +1439,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      sig_list = weights_sistema_descorrelacion(df_filtered,
                                                              ALL_STRATEGIES[s]["main"],
                                                              ALL_STRATEGIES[s]["secondary"])
+                 elif s == "Sistema Factores": # Integración de la nueva estrategia
+                     sig_list = weights_sistema_factores(df_filtered,
+                                                         ALL_STRATEGIES[s]["tickers"])
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
                  signals_dict_ind = {sig[0]: sig[1] for sig in sig_list}
                  if not rebalance_dates_ind:
@@ -1345,12 +1475,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.error(f"Error calculando serie para {s}: {e}")
                 ind_series[s] = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                 ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
-                
         # ---------- MOSTRAR RESULTADOS ----------
         try:
             tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
             tabs = st.tabs(tab_names)
-            
             # ---- TAB 0: COMBINADA ----
             with tabs[0]:
                 col1, col2 = st.columns(2)
@@ -1362,7 +1490,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     st.metric("MaxDD (SPY)", f"{met_spy['MaxDD']} %")
                 st.metric("Sharpe (Combinada)", met_comb["Sharpe"])
                 st.metric("Sharpe (SPY)", met_spy["Sharpe"])
-                
                 # Mostrar señales COMBINADAS
                 st.subheader("🎯 Señal Cartera Combinada")
                 st.write(f"📊 Datos disponibles: {df.index.min().strftime('%Y-%m-%d')} a {df.index.max().strftime('%Y-%m-%d')}")
@@ -1383,7 +1510,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 with col2:
                     st.write("**Actual (Hipotética):**")
                     st.dataframe(format_signal_for_display(combined_current), use_container_width=True, hide_index=True)
-                    
                 # Gráficos
                 st.subheader("📈 Equity Curve")
                 fig = go.Figure()
@@ -1391,21 +1517,19 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
                 fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
                 st.plotly_chart(fig, use_container_width=True)
-                
                 # Drawdown
                 st.subheader("📉 Drawdown")
                 dd_comb = (comb_series/comb_series.cummax()-1)*100
                 dd_spy = (spy_series/spy_series.cummax()-1)*100
                 fig_dd = go.Figure()
-                fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada", 
+                fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada",
                                           line=dict(color='red', width=2),
                                           fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
-                fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY", 
+                fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY",
                                           line=dict(color='orange', width=2, dash="dot"),
                                           fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
                 fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
                 st.plotly_chart(fig_dd, use_container_width=True)
-                
                 # Tabla de correlaciones
                 st.subheader("🔗 Correlaciones")
                 try:
@@ -1422,52 +1546,47 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     st.dataframe(corr_matrix.round(3), use_container_width=True)
                 except Exception as e:
                     st.warning(f"No se pudieron calcular las correlaciones: {e}")
-                    
                 # NUEVA: Tabla de retornos mensuales
                 st.subheader("📅 Retornos Mensuales por Año")
                 try:
-                    # Calcular retornos mensuales reales para la cartera combinada
-                    # Usamos los precios mensuales para calcular retornos precisos
-                    comb_series_monthly_prices = comb_series.resample('ME').last()
-                    monthly_returns_raw = comb_series_monthly_prices.pct_change().dropna()
-                    
-                    if not monthly_returns_raw.empty:
-                        # Crear un DataFrame con año, mes y retorno
-                        monthly_returns_df = pd.DataFrame({
-                            'Year': monthly_returns_raw.index.year,
-                            'Month': monthly_returns_raw.index.month, # Mes como número entero
-                            'Return': monthly_returns_raw.values
-                        })
-                        
-                        # Agrupar por año para facilitar el acceso
-                        yearly_groups = monthly_returns_df.groupby('Year')
-                        
-                        # Preparar datos para la tabla
+                    # Obtener retornos mensuales para la cartera combinada
+                    returns = comb_series.pct_change().dropna()
+                    if not returns.empty:
+                        # Asegurarse de que el índice sea de tipo datetime
+                        returns.index = pd.to_datetime(returns.index)
+                        # Resamplear a fin de mes para asegurar consistencia
+                        returns = returns.resample('ME').last()
+                        # Crear un DataFrame con los retornos y una columna auxiliar para el año
+                        returns_df = pd.DataFrame({'Return': returns, 'Year': returns.index.year})
+                        # Agrupar por año
+                        yearly_groups = returns_df.groupby('Year')
+                        # Formatear para tabla
                         table_data = []
                         all_years = sorted(yearly_groups.groups.keys())
-                        month_columns = [f"{i:02d}" for i in range(1, 13)] # 01, 02, ..., 12
-                        
+                        # Generar encabezados de meses (01, 02, ..., 12)
+                        month_columns = [f"{i:02d}" for i in range(1, 13)]
                         for year in all_years:
+                            # Inicializar la fila con el año
                             row = [year]
                             # Obtener los datos de retornos para este año
                             year_data = yearly_groups.get_group(year)
-                            # Crear un diccionario {mes: retorno} para este año
-                            monthly_returns_for_year = dict(zip(year_data['Month'], year_data['Return']))
-                            
-                            # Llenar los meses de enero (1) a diciembre (12)
+                            # Crear un diccionario para acceder rápidamente a los retornos por mes
+                            # Usamos el número del mes (1-12) como clave
+                            monthly_returns_for_year = {row_index.month: row_data['Return'] for row_index, row_data in year_data.iterrows()}
+                            # Iterar sobre cada mes (1 a 12)
                             for month in range(1, 13):
-                                if month in monthly_returns_for_year and not pd.isna(monthly_returns_for_year[month]):
+                                if month in monthly_returns_for_year:
                                     value = monthly_returns_for_year[month]
+                                    # Formatear con signo y porcentaje
                                     formatted_value = f"{value:+.1f}%"
                                     row.append(formatted_value)
                                 else:
-                                    row.append("") # Celda vacía si no hay dato
+                                    # Si no hay dato para ese mes, dejar celda vacía
+                                    row.append("")
                             table_data.append(row)
-                        
-                        # Crear y mostrar la tabla
+                        # Crear DataFrame para la tabla
                         columns = ['Año'] + month_columns
                         df_table = pd.DataFrame(table_data, columns=columns)
-                        
                         # Aplicar estilos condicionales
                         def color_cells(val):
                             if val == "":
@@ -1482,23 +1601,29 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                     sign = 1
                                 num = sign * float(num_str)
                                 if num > 0:
-                                    return f'background-color: rgba(144, 238, 144, 0.5); color: black;' # Verde claro
+                                    # Verde claro para positivo
+                                    return f'background-color: rgba(144, 238, 144, 0.5); color: black;'
                                 elif num < 0:
-                                    return f'background-color: rgba(255, 182, 193, 0.5); color: black;' # Rojo claro
+                                    # Rojo claro para negativo
+                                    return f'background-color: rgba(255, 182, 193, 0.5); color: black;'
                                 else:
-                                    return 'background-color: white; color: black;' # Blanco para cero
+                                    # Blanco para cero
+                                    return 'background-color: white; color: black;'
                             except ValueError:
+                                # En caso de error de conversión, celda normal
                                 return 'background-color: white; color: black;'
                             except Exception:
                                 return 'background-color: white; color: black;'
-                        
+                        # Aplicar estilos
                         styled_table = df_table.style.applymap(color_cells)
                         st.dataframe(styled_table, use_container_width=True)
                     else:
-                        st.info("No hay datos de retornos mensuales suficientes para mostrar.")
+                        st.info("No hay datos de retornos para mostrar.")
                 except Exception as e:
                     st.warning(f"No se pudo generar la tabla de retornos mensuales: {e}")
-                    
+                    # Opcional: Mostrar el traceback completo para depuración
+                    # import traceback
+                    # st.text(traceback.format_exc())
             # ---- TABS INDIVIDUALES ----
             for idx, s in enumerate(active, start=1):
                 try:
@@ -1514,7 +1639,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             with col2:
                                 st.metric("Sharpe", met["Sharpe"])
                                 st.metric("Vol", f"{met['Vol']} %")
-                                
                             # Mostrar señales individuales
                             st.subheader("🎯 Señales")
                             col1, col2 = st.columns(2)
@@ -1524,7 +1648,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             with col2:
                                 st.write("**Actual (Hipotética):**")
                                 st.dataframe(format_signal_for_display(signals_dict_current.get(s, {})), use_container_width=True, hide_index=True)
-                                
                             # Gráficos individuales
                             st.subheader("📈 Equity Curve")
                             fig = go.Figure()
@@ -1532,70 +1655,65 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
                             fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
                             st.plotly_chart(fig, use_container_width=True)
-                            
                             # Drawdown individuales
                             st.subheader("📉 Drawdown")
                             dd_ind = (ser/ser.cummax()-1)*100
                             fig_dd = go.Figure()
-                            fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s, 
+                            fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s,
                                                       line=dict(color='red', width=2),
                                                       fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
-                            fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY", 
+                            fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY",
                                                       line=dict(color='orange', width=2, dash="dot"),
                                                       fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
                             fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
                             st.plotly_chart(fig_dd, use_container_width=True)
-                            
                             # NUEVA: Tabla de retornos mensuales
                             st.subheader("📅 Retornos Mensuales por Año")
                             try:
-                                # Calcular retornos mensuales reales para esta estrategia
-                                # Usamos los precios mensuales para calcular retornos precisos
-                                ser_monthly_prices = ser.resample('ME').last()
-                                monthly_returns_raw = ser_monthly_prices.pct_change().dropna()
-                                
-                                if not monthly_returns_raw.empty:
-                                    # Crear un DataFrame con año, mes y retorno
-                                    monthly_returns_df = pd.DataFrame({
-                                        'Year': monthly_returns_raw.index.year,
-                                        'Month': monthly_returns_raw.index.month, # Mes como número entero
-                                        'Return': monthly_returns_raw.values
-                                    })
-                                    
-                                    # Agrupar por año para facilitar el acceso
-                                    yearly_groups = monthly_returns_df.groupby('Year')
-                                    
-                                    # Preparar datos para la tabla
+                                # Obtener retornos mensuales para esta estrategia
+                                returns = ser.pct_change().dropna()
+                                if not returns.empty:
+                                    # Asegurarse de que el índice sea de tipo datetime
+                                    returns.index = pd.to_datetime(returns.index)
+                                    # Resamplear a fin de mes para asegurar consistencia
+                                    returns = returns.resample('ME').last()
+                                    # Crear un DataFrame con los retornos y una columna auxiliar para el año
+                                    returns_df = pd.DataFrame({'Return': returns, 'Year': returns.index.year})
+                                    # Agrupar por año
+                                    yearly_groups = returns_df.groupby('Year')
+                                    # Formatear para tabla
                                     table_data = []
                                     all_years = sorted(yearly_groups.groups.keys())
-                                    month_columns = [f"{i:02d}" for i in range(1, 13)] # 01, 02, ..., 12
-                                    
+                                    # Generar encabezados de meses (01, 02, ..., 12)
+                                    month_columns = [f"{i:02d}" for i in range(1, 13)]
                                     for year in all_years:
+                                        # Inicializar la fila con el año
                                         row = [year]
                                         # Obtener los datos de retornos para este año
                                         year_data = yearly_groups.get_group(year)
-                                        # Crear un diccionario {mes: retorno} para este año
-                                        monthly_returns_for_year = dict(zip(year_data['Month'], year_data['Return']))
-                                        
-                                        # Llenar los meses de enero (1) a diciembre (12)
+                                        # Crear un diccionario para acceder rápidamente a los retornos por mes
+                                        # Usamos el número del mes (1-12) como clave
+                                        monthly_returns_for_year = {row_index.month: row_data['Return'] for row_index, row_data in year_data.iterrows()}
+                                        # Iterar sobre cada mes (1 a 12)
                                         for month in range(1, 13):
-                                            if month in monthly_returns_for_year and not pd.isna(monthly_returns_for_year[month]):
+                                            if month in monthly_returns_for_year:
                                                 value = monthly_returns_for_year[month]
+                                                # Formatear con signo y porcentaje
                                                 formatted_value = f"{value:+.1f}%"
                                                 row.append(formatted_value)
                                             else:
-                                                row.append("") # Celda vacía si no hay dato
+                                                # Si no hay dato para ese mes, dejar celda vacía
+                                                row.append("")
                                         table_data.append(row)
-                                    
-                                    # Crear y mostrar la tabla
+                                    # Crear DataFrame para la tabla
                                     columns = ['Año'] + month_columns
                                     df_table = pd.DataFrame(table_data, columns=columns)
-                                    
                                     # Aplicar estilos condicionales (misma función que antes)
                                     def color_cells(val):
                                         if val == "":
                                             return 'background-color: white; color: black;'
                                         try:
+                                            # Extraer el número de la cadena de texto
                                             num_str = val.replace('%', '').replace('+', '')
                                             if num_str.startswith('-'):
                                                 sign = -1
@@ -1604,22 +1722,29 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                                 sign = 1
                                             num = sign * float(num_str)
                                             if num > 0:
+                                                # Verde claro para positivo
                                                 return f'background-color: rgba(144, 238, 144, 0.5); color: black;'
                                             elif num < 0:
+                                                # Rojo claro para negativo
                                                 return f'background-color: rgba(255, 182, 193, 0.5); color: black;'
                                             else:
+                                                # Blanco para cero
                                                 return 'background-color: white; color: black;'
                                         except ValueError:
+                                            # En caso de error de conversión, celda normal
                                             return 'background-color: white; color: black;'
                                         except Exception:
                                             return 'background-color: white; color: black;'
-                                    
+                                    # Aplicar estilos
                                     styled_table = df_table.style.applymap(color_cells)
                                     st.dataframe(styled_table, use_container_width=True)
                                 else:
-                                    st.info("No hay datos de retornos mensuales suficientes para mostrar.")
+                                    st.info("No hay datos de retornos para mostrar.")
                             except Exception as e:
                                 st.warning(f"No se pudo generar la tabla de retornos mensuales para {s}: {e}")
+                                # Opcional: Mostrar el traceback completo para depuración
+                                # import traceback
+                                # st.text(traceback.format_exc())
                         else:
                             st.write("No hay datos disponibles para esta estrategia.")
                 except Exception as e:
