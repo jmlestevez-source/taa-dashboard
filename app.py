@@ -1499,27 +1499,40 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      end_hold_date_ind = min(end_hold_date_ind, df_filtered.index[-1] + pd.DateOffset(days=1))
                      period_returns_ind = df_returns[(df_returns.index >= start_hold_date_ind) & (df_returns.index < end_hold_date_ind)]
                      weights_ind = signals_dict_ind.get(start_hold_date_ind, {})
-                     for idx, (date, row) in enumerate(period_returns_ind.iterrows()):
-                         portfolio_return_ind = 0
-                         for ticker, weight in weights_ind.items():
-                             if ticker in row.index and not pd.isna(row[ticker]):
-                                 portfolio_return_ind += weight * row[ticker]
-                         new_value_ind = eq_values[-1] * (1 + portfolio_return_ind)
-                         eq_values.append(new_value_ind)
-                         eq_dates.append(date)
+                     # CORRECCIÓN PRINCIPAL: Calcular el retorno compuesto del período mensual
+                     period_return_compounded = 0.0
+                     if not period_returns_ind.empty and weights_ind:
+                         # Acumular el retorno diario ponderado para todo el período
+                         cumulative_period_return = 1.0
+                         for idx, (date, row) in period_returns_ind.iterrows():
+                             daily_portfolio_return = 0
+                             for ticker, weight in weights_ind.items():
+                                 if ticker in row.index and not pd.isna(row[ticker]):
+                                     daily_portfolio_return += weight * row[ticker]
+                             # Acumular el retorno diario al retorno compuesto del período
+                             cumulative_period_return *= (1 + daily_portfolio_return)
+                         # El retorno compuesto del período es el producto de (1 + retornos diarios) - 1
+                         period_return_compounded = cumulative_period_return - 1
+                     # Calcular el nuevo valor de la cartera al final del período
+                     new_value_at_end_of_period = eq_values[-1] * (1 + period_return_compounded)
+                     eq_values.append(new_value_at_end_of_period)
+                     # Usar la fecha del último día del período
+                     eq_dates.append(end_hold_date_ind - pd.DateOffset(days=1))
                  ser_raw = pd.Series(eq_values, index=eq_dates)
-                 ser = ser_raw[~ser_raw.index.duplicated(keep='last')].sort_index()
-                 ser = ser.reindex(comb_series.index, method='pad').fillna(method='bfill')
+                 ser_clean = ser_raw[~ser_raw.index.duplicated(keep='last')].sort_index()
+                 # Reindexar para que coincida con comb_series (para gráficos y comparaciones)
+                 ser = ser_clean.reindex(comb_series.index, method='pad').fillna(method='bfill')
                  ind_series[s] = ser
                  ind_metrics[s] = calc_metrics(ser.pct_change().dropna())
             except Exception as e:
                 st.error(f"Error calculando serie para {s}: {e}")
+                import traceback
+                st.text(traceback.format_exc())
                 ind_series[s] = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                 ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
         # ---------- MOSTRAR RESULTADOS ----------
         try:
-            # Determinar nombres de pestañas, incluyendo la nueva pestaña de logs
-            tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active] + ["📝 Log de Señales"]
+            tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
             tabs = st.tabs(tab_names)
             # ---- TAB 0: COMBINADA ----
             with tabs[0]:
@@ -1591,8 +1604,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 # NUEVA: Tabla de retornos mensuales
                 st.subheader("📅 Retornos Mensuales por Año")
                 try:
-                    # CORRECCIÓN: Calcular retornos mensuales reales usando resample('ME').last()
-                    # Esto asegura que se tome el último valor de cada mes para calcular el retorno mensual
+                    # Obtener retornos mensuales para la cartera combinada
+                    # CORRECCIÓN: Calcular retornos mensuales usando resample('ME').last()
                     monthly_values = comb_series.resample('ME').last()
                     monthly_returns = monthly_values.pct_change().dropna()
                     if not monthly_returns.empty:
@@ -1722,8 +1735,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             # NUEVA: Tabla de retornos mensuales
                             st.subheader("📅 Retornos Mensuales por Año")
                             try:
-                                # CORRECCIÓN: Calcular retornos mensuales reales usando resample('ME').last()
-                                # Esto asegura que se tome el último valor de cada mes para calcular el retorno mensual
+                                # Obtener retornos mensuales para esta estrategia
+                                # CORRECCIÓN: Calcular retornos mensuales usando resample('ME').last()
                                 monthly_values = ser.resample('ME').last()
                                 monthly_returns = monthly_values.pct_change().dropna()
                                 if not monthly_returns.empty:
@@ -1811,28 +1824,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             st.write("No hay datos disponibles para esta estrategia.")
                 except Exception as e:
                     st.error(f"❌ Error en pestaña {s}: {e}")
-            # ---- NUEVA PESTAÑA: LOG DE SEÑALES ----
-            with tabs[-1]: # Acceder a la última pestaña creada
-                st.header("📝 Log de Señales Mensuales")
-                # Mostrar log de señales para debugging
-                for s in active:
-                    st.subheader(f"**{s} - Señales Reales:**")
-                    if s in signals_log and signals_log[s]["real"]:
-                        signal_df = pd.DataFrame([
-                            {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}
-                            for sig in signals_log[s]["real"]
-                        ])
-                        st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
-                    else:
-                        st.write("No hay señales disponibles")
-                    st.subheader(f"**{s} - Señal Hipotética Actual:**")
-                    if s in signals_log and signals_log[s]["hypothetical"]:
-                        hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
-                        # Corrección: Convertir Timestamp a string si es necesario
-                        fecha_str = hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else str(hyp_signal[0])
-                        st.write(f"Fecha: {fecha_str}")
-                        st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
-                    st.markdown("---")
         except Exception as e:
             st.error(f"❌ Error mostrando resultados combinados: {e}")
 else:
