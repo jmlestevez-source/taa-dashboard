@@ -64,11 +64,11 @@ SISTEMA_DESCORRELACION = {
     "main": ['VTI', 'GLD', 'TLT'],
     "secondary": ['SPY', 'QQQ', 'MDY', 'EFA']
 }
-# Nueva estrategia: Momentum Dinámico con Protección (revisada)
-MOMENTUM_DINAMICO_PROTECCION = {
-    "risky": ['SPY', 'QQQ', 'EFA', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'HYG', 'LQD'],
-    "safe": ['SHY', 'IEF', 'LQD', 'BIL'],
-    "canary": ['^VIX', 'TLT'] # ^VIX para estrés, TLT como bono largo (defensivo)
+# Nueva estrategia: HAA (Hybrid Adaptive Asset Allocation)
+HAA = {
+    "offensive_universe": ['SPY', 'IWM', 'EFA', 'EEM', 'VNQ', 'DBC', 'IEF', 'TLT'],
+    "canary": ['TIP'],
+    "cash_proxy_candidates": ['IEF', 'BIL'] # Para representar efectivo y alternativas defensivas
 }
 
 ALL_STRATEGIES = {
@@ -80,7 +80,7 @@ ALL_STRATEGIES = {
     "Quint Switching Filtered": QUINT_SWITCHING_FILTERED,
     "BAA Aggressive": BAA_AGGRESSIVE,
     "Sistema Descorrelación": SISTEMA_DESCORRELACION,
-    "Momentum Dinámico con Protección": MOMENTUM_DINAMICO_PROTECCION # Añadida la nueva estrategia
+    "HAA": HAA # Añadida la nueva estrategia
 }
 
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
@@ -470,32 +470,28 @@ def momentum_score_13612w(df, symbol):
     except Exception:
         return 0
 
-# Función auxiliar para Momentum Dinámico con Protección
-def momentum_dinamico_score(df, symbol):
-    """Calcula el score de Momentum Dinámico: (ROC_6M - ROC_12M) / Volatilidad_12M"""
-    if len(df) < 13: # Necesita 13 meses para ROC_12M y Vol_12M
+# Nueva función auxiliar para HAA
+def haa_momentum_score(df, symbol):
+    """Calcula el momentum score HAA: media no ponderada de ROC_1M, ROC_3M, ROC_6M, ROC_12M"""
+    if len(df) < 13: # Necesita al menos 13 meses para ROC_12M
         return float('-inf')
     try:
-        p0 = df[symbol].iloc[-1]
-        p6 = df[symbol].iloc[-7]
-        p12 = df[symbol].iloc[-13]
+        p0 = df[symbol].iloc[-1]   # Precio actual
+        p1 = df[symbol].iloc[-2]   # Hace 1 mes
+        p3 = df[symbol].iloc[-4]   # Hace 3 meses
+        p6 = df[symbol].iloc[-7]   # Hace 6 meses
+        p12 = df[symbol].iloc[-13] # Hace 12 meses
         
-        if p6 <= 0 or p12 <= 0:
+        if p1 <= 0 or p3 <= 0 or p6 <= 0 or p12 <= 0:
             return float('-inf')
+            
+        roc_1 = (p0 / p1) - 1
+        roc_3 = (p0 / p3) - 1
+        roc_6 = (p0 / p6) - 1
+        roc_12 = (p0 / p12) - 1
         
-        roc_6m = (p0 / p6) - 1
-        roc_12m = (p0 / p12) - 1
-        
-        # Calcular volatilidad de los últimos 12 meses (12 retornos mensuales)
-        returns_12m = df[symbol].pct_change().iloc[-12:]
-        if len(returns_12m) < 2 or returns_12m.isnull().any() or (returns_12m == 0).all():
-            return float('-inf')
-        vol_12m = returns_12m.std()
-        
-        if vol_12m == 0 or pd.isna(vol_12m):
-            return float('-inf')
-        
-        score = (roc_6m - roc_12m) / vol_12m
+        # Media no ponderada
+        score = (roc_1 + roc_3 + roc_6 + roc_12) / 4
         return score
     except Exception:
         return float('-inf')
@@ -1018,52 +1014,64 @@ def weights_sistema_descorrelacion(df, main, secondary):
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
-# Nueva función para Momentum Dinámico con Protección
-def weights_momentum_dinamico_proteccion(df, risky, safe, canary):
-    """Calcula señales para Momentum Dinámico con Protección"""
+# Nueva función para HAA
+def weights_haa(df, offensive_universe, canary, cash_proxy_candidates):
+    """Calcula señales para HAA (Hybrid Adaptive Asset Allocation)"""
     if len(df) < 13:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
     for i in range(13, len(df)):
         try:
             df_subset = df.iloc[:i]
-            # Etapa 1: Evaluar Canarios
-            canary_scores = [momentum_dinamico_score(df_subset, s) for s in canary if s in df_subset.columns]
-            # Filtrar scores válidos
-            valid_canary_scores = [s for s in canary_scores if not np.isinf(s) and not np.isnan(s)]
-            if not valid_canary_scores:
-                # Si no hay scores válidos, asumir mercado normal
-                avg_canary_score = 0
+            # Etapa 1: Evaluar el canario TIPS
+            if canary and len(canary) > 0:
+                tip_symbol = canary[0] # Asumimos que el primer elemento es TIP
+                if tip_symbol in df_subset.columns:
+                    tip_momentum = haa_momentum_score(df_subset, tip_symbol)
+                else:
+                    # Si no hay datos de TIP, asumimos mercado normal
+                    tip_momentum = 0
             else:
-                avg_canary_score = np.mean(valid_canary_scores)
+                tip_momentum = 0 # Fallback
             
             w = {}
-            # LÓGICA CORREGIDA: Si el score promedio de los canarios es POSITIVO, hay estrés
-            # ^VIX positivo = estrés. TLT positivo = puede ser estrés (búsqueda de refugio) o bonificación.
-            # El promedio positivo refuerza la señal de estrés.
-            if avg_canary_score > 0: # Mercado en estrés
-                # Etapa 2a: Asignación Defensiva
-                safe_scores = {s: momentum_dinamico_score(df_subset, s) for s in safe if s in df_subset.columns}
+            if tip_momentum > 0: # Etapa 2a: Modo Ofensivo
+                # Calcular momentum para el universo ofensivo
+                offensive_momentum = {s: haa_momentum_score(df_subset, s) for s in offensive_universe if s in df_subset.columns}
                 # Filtrar scores válidos
-                valid_safe_scores = {k: v for k, v in safe_scores.items() if not np.isinf(v) and not np.isnan(v)}
-                if valid_safe_scores:
-                    best_safe = max(valid_safe_scores, key=valid_safe_scores.get)
-                    w = {best_safe: 1.0}
-                # Si no hay activos seguros válidos, w queda vacío (efectivo)
-            else: # Mercado normal
-                # Etapa 2b: Asignación Ofensiva
-                risky_scores = {s: momentum_dinamico_score(df_subset, s) for s in risky if s in df_subset.columns}
-                # Filtrar scores válidos
-                valid_risky_scores = {k: v for k, v in risky_scores.items() if not np.isinf(v) and not np.isnan(v)}
-                if len(valid_risky_scores) >= 5:
-                    # Seleccionar los 5 mejores
-                    top_5_risky = sorted(valid_risky_scores.items(), key=lambda item: item[1], reverse=True)[:5]
-                    w = {asset: 0.20 for asset, score in top_5_risky}
-                elif valid_risky_scores:
-                    # Si hay menos de 5, invertir en los disponibles
-                    n_avail = len(valid_risky_scores)
-                    w = {asset: 1.0 / n_avail for asset in valid_risky_scores.keys()}
-                # Si no hay activos riesgosos válidos, w queda vacío (efectivo)
+                valid_offensive_momentum = {k: v for k, v in offensive_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                if len(valid_offensive_momentum) >= 4:
+                    # Seleccionar los 4 con mejor momentum
+                    top_4_offensive = sorted(valid_offensive_momentum.items(), key=lambda item: item[1], reverse=True)[:4]
+                    # Asignar 25% a cada uno si su momentum es positivo, sino ir a efectivo
+                    # Determinar el mejor proxy de efectivo
+                    cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
+                    valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                    if valid_cash_proxy_momentum:
+                        best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
+                    else:
+                        best_cash_proxy = 'BIL' # Default
+                    
+                    for asset, momentum_score in top_4_offensive:
+                        if momentum_score > 0:
+                            w[asset] = w.get(asset, 0) + 0.25
+                        else:
+                            # Si el momentum es negativo, asignar a efectivo
+                            w[best_cash_proxy] = w.get(best_cash_proxy, 0) + 0.25
+                # Si hay menos de 4 activos válidos, se podría manejar de otra forma,
+                # pero por simplicidad dejamos la cartera vacía o con efectivo.
+                            
+            else: # Etapa 2b: Modo Defensivo
+                # Asignar 100% al mejor activo entre los candidatos a efectivo
+                cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
+                valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                if valid_cash_proxy_momentum:
+                    best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
+                    w[best_cash_proxy] = 1.0
+                else:
+                    # Si no hay proxies de efectivo válidos, asignar a BIL por defecto
+                    w['BIL'] = 1.0
+                    
             sig.append((df.index[i], w))
         except Exception as e:
             sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
@@ -1072,30 +1080,53 @@ def weights_momentum_dinamico_proteccion(df, risky, safe, canary):
     if len(df) >= 13:
          try:
              df_subset = df
-             canary_scores = [momentum_dinamico_score(df_subset, s) for s in canary if s in df_subset.columns]
-             valid_canary_scores = [s for s in canary_scores if not np.isinf(s) and not np.isnan(s)]
-             if not valid_canary_scores:
-                 avg_canary_score = 0
+             # Etapa 1: Evaluar el canario TIPS
+             if canary and len(canary) > 0:
+                 tip_symbol = canary[0] # Asumimos que el primer elemento es TIP
+                 if tip_symbol in df_subset.columns:
+                     tip_momentum = haa_momentum_score(df_subset, tip_symbol)
+                 else:
+                     # Si no hay datos de TIP, asumimos mercado normal
+                     tip_momentum = 0
              else:
-                 avg_canary_score = np.mean(valid_canary_scores)
+                 tip_momentum = 0 # Fallback
              
              w = {}
-             # LÓGICA CORREGIDA: Si el score promedio de los canarios es POSITIVO, hay estrés
-             if avg_canary_score > 0:
-                 safe_scores = {s: momentum_dinamico_score(df_subset, s) for s in safe if s in df_subset.columns}
-                 valid_safe_scores = {k: v for k, v in safe_scores.items() if not np.isinf(v) and not np.isnan(v)}
-                 if valid_safe_scores:
-                     best_safe = max(valid_safe_scores, key=valid_safe_scores.get)
-                     w = {best_safe: 1.0}
-             else:
-                 risky_scores = {s: momentum_dinamico_score(df_subset, s) for s in risky if s in df_subset.columns}
-                 valid_risky_scores = {k: v for k, v in risky_scores.items() if not np.isinf(v) and not np.isnan(v)}
-                 if len(valid_risky_scores) >= 5:
-                     top_5_risky = sorted(valid_risky_scores.items(), key=lambda item: item[1], reverse=True)[:5]
-                     w = {asset: 0.20 for asset, score in top_5_risky}
-                 elif valid_risky_scores:
-                     n_avail = len(valid_risky_scores)
-                     w = {asset: 1.0 / n_avail for asset in valid_risky_scores.keys()}
+             if tip_momentum > 0: # Etapa 2a: Modo Ofensivo
+                 # Calcular momentum para el universo ofensivo
+                 offensive_momentum = {s: haa_momentum_score(df_subset, s) for s in offensive_universe if s in df_subset.columns}
+                 # Filtrar scores válidos
+                 valid_offensive_momentum = {k: v for k, v in offensive_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                 if len(valid_offensive_momentum) >= 4:
+                     # Seleccionar los 4 con mejor momentum
+                     top_4_offensive = sorted(valid_offensive_momentum.items(), key=lambda item: item[1], reverse=True)[:4]
+                     # Asignar 25% a cada uno si su momentum es positivo, sino ir a efectivo
+                     # Determinar el mejor proxy de efectivo
+                     cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
+                     valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                     if valid_cash_proxy_momentum:
+                         best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
+                     else:
+                         best_cash_proxy = 'BIL' # Default
+                     
+                     for asset, momentum_score in top_4_offensive:
+                         if momentum_score > 0:
+                             w[asset] = w.get(asset, 0) + 0.25
+                         else:
+                             # Si el momentum es negativo, asignar a efectivo
+                             w[best_cash_proxy] = w.get(best_cash_proxy, 0) + 0.25
+                             
+             else: # Etapa 2b: Modo Defensivo
+                 # Asignar 100% al mejor activo entre los candidatos a efectivo
+                 cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
+                 valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                 if valid_cash_proxy_momentum:
+                     best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
+                     w[best_cash_proxy] = 1.0
+                 else:
+                     # Si no hay proxies de efectivo válidos, asignar a BIL por defecto
+                     w['BIL'] = 1.0
+                     
              sig.append((df.index[-1], w))
          except Exception as e:
              sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
@@ -1114,7 +1145,7 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}"
              })
-    if not formatted_data:
+    if not formatted_
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
@@ -1141,10 +1172,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             elif s == "Sistema Descorrelación":
                 all_tickers_needed.update(strategy["main"])
                 all_tickers_needed.update(strategy["secondary"])
-            elif s == "Momentum Dinámico con Protección": # Manejo de la nueva estrategia
-                all_tickers_needed.update(strategy["risky"])
-                all_tickers_needed.update(strategy["safe"])
+            elif s == "HAA": # Manejo de la nueva estrategia
+                all_tickers_needed.update(strategy["offensive_universe"])
                 all_tickers_needed.update(strategy["canary"])
+                all_tickers_needed.update(strategy["cash_proxy_candidates"])
             else:
                 for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective", "safe"]:
                     if key in strategy:
@@ -1175,10 +1206,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.stop()
         # --- Calcular señales antes de filtrar ---
         last_data_date = df.index.max()
-        # CORREGIDO: Obtener el último día del mes COMPLETO anterior al último dato disponible
-        # Esto asegura que la señal "REAL" se calcule con datos hasta el final del mes anterior
-        # Ejemplo: Si last_data_date es 2025-09-02, last_month_end_for_real_signal será 2025-08-31
-        last_month_end_for_real_signal = (last_data_date.replace(day=1) - timedelta(days=1))
+        # Obtener el último día del mes ANTERIOR al último dato disponible
+        last_month_end_for_real_signal = (last_data_date.replace(day=1) - timedelta(days=1)).replace(day=1) + pd.offsets.MonthEnd(0)
         df_up_to_last_month_end = df[df.index <= last_month_end_for_real_signal]
         df_full = df
         signals_dict_last = {}
@@ -1240,15 +1269,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_current = weights_sistema_descorrelacion(df_full,
                                                                  ALL_STRATEGIES[s]["main"],
                                                                  ALL_STRATEGIES[s]["secondary"])
-                elif s == "Momentum Dinámico con Protección": # Integración de la nueva estrategia
-                    sig_last = weights_momentum_dinamico_proteccion(df_up_to_last_month_end,
-                                                                   ALL_STRATEGIES[s]["risky"],
-                                                                   ALL_STRATEGIES[s]["safe"],
-                                                                   ALL_STRATEGIES[s]["canary"])
-                    sig_current = weights_momentum_dinamico_proteccion(df_full,
-                                                                      ALL_STRATEGIES[s]["risky"],
-                                                                      ALL_STRATEGIES[s]["safe"],
-                                                                      ALL_STRATEGIES[s]["canary"])
+                elif s == "HAA": # Integración de la nueva estrategia
+                    sig_last = weights_haa(df_up_to_last_month_end,
+                                          ALL_STRATEGIES[s]["offensive_universe"],
+                                          ALL_STRATEGIES[s]["canary"],
+                                          ALL_STRATEGIES[s]["cash_proxy_candidates"])
+                    sig_current = weights_haa(df_full,
+                                           ALL_STRATEGIES[s]["offensive_universe"],
+                                           ALL_STRATEGIES[s]["canary"],
+                                           ALL_STRATEGIES[s]["cash_proxy_candidates"])
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]
                     # st.write(f"📝 Señal REAL para {s}: {sig_last[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
@@ -1334,11 +1363,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     strategy_signals[s] = weights_sistema_descorrelacion(df_filtered,
                                                                        ALL_STRATEGIES[s]["main"],
                                                                        ALL_STRATEGIES[s]["secondary"])
-                elif s == "Momentum Dinámico con Protección": # Integración de la nueva estrategia
-                    strategy_signals[s] = weights_momentum_dinamico_proteccion(df_filtered,
-                                                                              ALL_STRATEGIES[s]["risky"],
-                                                                              ALL_STRATEGIES[s]["safe"],
-                                                                              ALL_STRATEGIES[s]["canary"])
+                elif s == "HAA": # Integración de la nueva estrategia
+                    strategy_signals[s] = weights_haa(df_filtered,
+                                                     ALL_STRATEGIES[s]["offensive_universe"],
+                                                     ALL_STRATEGIES[s]["canary"],
+                                                     ALL_STRATEGIES[s]["cash_proxy_candidates"])
             # 2. Preparar estructura para la cartera combinada
             rebalance_dates = [sig[0] for sig in strategy_signals[active[0]]] if active and strategy_signals.get(active[0]) else []
             if not rebalance_dates:
@@ -1447,11 +1476,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      sig_list = weights_sistema_descorrelacion(df_filtered,
                                                              ALL_STRATEGIES[s]["main"],
                                                              ALL_STRATEGIES[s]["secondary"])
-                 elif s == "Momentum Dinámico con Protección": # Integración de la nueva estrategia
-                     sig_list = weights_momentum_dinamico_proteccion(df_filtered,
-                                                                    ALL_STRATEGIES[s]["risky"],
-                                                                    ALL_STRATEGIES[s]["safe"],
-                                                                    ALL_STRATEGIES[s]["canary"])
+                 elif s == "HAA": # Integración de la nueva estrategia
+                     sig_list = weights_haa(df_filtered,
+                                           ALL_STRATEGIES[s]["offensive_universe"],
+                                           ALL_STRATEGIES[s]["canary"],
+                                           ALL_STRATEGIES[s]["cash_proxy_candidates"])
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
                  signals_dict_ind = {sig[0]: sig[1] for sig in sig_list}
                  if not rebalance_dates_ind:
