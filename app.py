@@ -11,6 +11,9 @@ import os
 import pickle
 import hashlib
 
+# Nueva importación para yfinance
+import yfinance as yf
+
 # ------------- CONFIG -------------
 st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
 st.title("🎯 Multi-Strategy Tactical Asset Allocation")
@@ -64,11 +67,11 @@ SISTEMA_DESCORRELACION = {
     "main": ['VTI', 'GLD', 'TLT'],
     "secondary": ['SPY', 'QQQ', 'MDY', 'EFA']
 }
-# Nueva estrategia: Momentum Dinámico con Protección
+# Nueva estrategia: Momentum Dinámico con Protección (revisada)
 MOMENTUM_DINAMICO_PROTECCION = {
     "risky": ['SPY', 'QQQ', 'EFA', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'HYG', 'LQD'],
     "safe": ['SHY', 'IEF', 'LQD', 'BIL'],
-    "canary": ['VXX', 'EEM'] # VXX para estrés, EEM como canario global
+    "canary": ['^VIX', 'TLT'] # ^VIX para estrés, TLT como bono largo (defensivo)
 }
 
 ALL_STRATEGIES = {
@@ -132,9 +135,42 @@ def get_available_fmp_key():
     st.warning("⚠️ Todas las API keys de FMP han alcanzado el límite diario.")
     return min(FMP_KEYS, key=lambda k: FMP_CALLS[k])
 
-# ------------- DESCARGA (Solo CSV desde GitHub + FMP) -------------
+# ------------- DESCARGA (Solo CSV desde GitHub + FMP + yfinance para ^VIX) -------------
 # Variable global para rastrear errores durante la descarga
 _DOWNLOAD_ERRORS_OCCURRED = False
+
+# --- NUEVA FUNCIÓN PARA DESCARGAR DATOS DE ^VIX CON YFINANCE ---
+def get_yfinance_data_single(ticker, start, end):
+    """Descarga datos usando yfinance para un solo ticker"""
+    global _DOWNLOAD_ERRORS_OCCURRED
+    try:
+        # st.write(f"🔄 Descargando {ticker} desde yfinance...") # Ocultar log
+        # Asegurarse de que las fechas sean datetime.date
+        if isinstance(start, pd.Timestamp):
+            start = start.date()
+        if isinstance(end, pd.Timestamp):
+            end = end.date()
+        
+        # Descargar datos
+        df = yf.download(ticker, start=start, end=end, progress=False)
+        
+        if df is not None and not df.empty:
+            # Seleccionar la columna 'Close' y renombrarla
+            close_series = df['Close'].rename(ticker)
+            # Convertir a DataFrame
+            df_final = close_series.to_frame()
+            # Asegurar que el índice sea datetime
+            df_final.index = pd.to_datetime(df_final.index)
+            # st.write(f"✅ {ticker} descargado desde yfinance - {len(df_final)} registros") # Ocultar log
+            return df_final
+        else:
+            st.warning(f"⚠️ No se obtuvieron datos para {ticker} desde yfinance")
+            _DOWNLOAD_ERRORS_OCCURRED = True
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"❌ Error descargando {ticker} desde yfinance: {e}")
+        _DOWNLOAD_ERRORS_OCCURRED = True
+        return pd.DataFrame()
 
 def should_use_fmp(csv_df, days_threshold=7):
     """Verifica si es necesario usar FMP basado en la frescura de los datos CSV"""
@@ -313,21 +349,50 @@ def download_all_data(tickers, start, end):
     global _DOWNLOAD_ERRORS_OCCURRED
     _DOWNLOAD_ERRORS_OCCURRED = False  # Reiniciar el indicador de errores al inicio
     # st.info("📥 Descargando datos...") # Ocultar log
-    data, bar = {}, st.progress(0)
-    total_tickers = len(tickers)
-    for idx, tk in enumerate(tickers):
-        try:
-            bar.progress((idx + 1) / total_tickers)
-            df = download_ticker_data(tk, start, end)
-            if not df.empty and len(df) > 0:
-                data[tk] = df
-            else:
-                st.warning(f"⚠️ {tk} no disponible")
+    data = {}
+    
+    # Identificar tickers especiales
+    tickers_para_yfinance = [t for t in tickers if t == '^VIX'] # Solo ^VIX por ahora
+    tickers_para_fmp_csv = [t for t in tickers if t not in tickers_para_yfinance]
+    
+    # Descargar tickers especiales con yfinance
+    if tickers_para_yfinance:
+        st.info("📥 Descargando datos especiales desde yfinance...")
+        bar = st.progress(0)
+        total_tickers_yf = len(tickers_para_yfinance)
+        for idx, tk in enumerate(tickers_para_yfinance):
+            try:
+                bar.progress((idx + 1) / total_tickers_yf)
+                df = get_yfinance_data_single(tk, start, end)
+                if not df.empty and len(df) > 0:
+                    data[tk] = df
+                else:
+                    st.warning(f"⚠️ {tk} no disponible desde yfinance")
+                    _DOWNLOAD_ERRORS_OCCURRED = True
+            except Exception as e:
+                st.error(f"❌ Error procesando {tk} desde yfinance: {e}")
                 _DOWNLOAD_ERRORS_OCCURRED = True
-        except Exception as e:
-            st.error(f"❌ Error procesando {tk}: {e}")
-            _DOWNLOAD_ERRORS_OCCURRED = True
-    bar.empty()
+        bar.empty()
+        
+    # Descargar el resto de tickers con el método original (FMP + CSV)
+    if tickers_para_fmp_csv:
+        st.info("📥 Descargando datos restantes desde FMP y CSV...")
+        bar = st.progress(0)
+        total_tickers_fmp = len(tickers_para_fmp_csv)
+        for idx, tk in enumerate(tickers_para_fmp_csv):
+            try:
+                bar.progress((idx + 1) / total_tickers_fmp)
+                df = download_ticker_data(tk, start, end)
+                if not df.empty and len(df) > 0:
+                    data[tk] = df
+                else:
+                    st.warning(f"⚠️ {tk} no disponible")
+                    _DOWNLOAD_ERRORS_OCCURRED = True
+            except Exception as e:
+                st.error(f"❌ Error procesando {tk}: {e}")
+                _DOWNLOAD_ERRORS_OCCURRED = True
+        bar.empty()
+        
     return data
 
 def clean_and_align(data_dict):
@@ -1030,7 +1095,7 @@ def weights_momentum_dinamico_proteccion(df, risky, safe, canary):
             # Etapa 1: Evaluar Canarios
             canary_scores = [momentum_dinamico_score(df_subset, s) for s in canary if s in df_subset.columns]
             # Filtrar scores válidos
-            valid_canary_scores = [s for s in canary_scores if not np.isinf(s)]
+            valid_canary_scores = [s for s in canary_scores if not np.isinf(s) and not np.isnan(s)]
             if not valid_canary_scores:
                 # Si no hay scores válidos, asumir mercado normal
                 avg_canary_score = 0
@@ -1038,11 +1103,14 @@ def weights_momentum_dinamico_proteccion(df, risky, safe, canary):
                 avg_canary_score = np.mean(valid_canary_scores)
             
             w = {}
-            if avg_canary_score <= 0: # Mercado en estrés
+            # LÓGICA CORREGIDA: Si el score promedio de los canarios es POSITIVO, hay estrés
+            # ^VIX positivo = estrés. TLT positivo = puede ser estrés (búsqueda de refugio) o bonificación.
+            # El promedio positivo refuerza la señal de estrés.
+            if avg_canary_score > 0: # Mercado en estrés
                 # Etapa 2a: Asignación Defensiva
                 safe_scores = {s: momentum_dinamico_score(df_subset, s) for s in safe if s in df_subset.columns}
                 # Filtrar scores válidos
-                valid_safe_scores = {k: v for k, v in safe_scores.items() if not np.isinf(v)}
+                valid_safe_scores = {k: v for k, v in safe_scores.items() if not np.isinf(v) and not np.isnan(v)}
                 if valid_safe_scores:
                     best_safe = max(valid_safe_scores, key=valid_safe_scores.get)
                     w = {best_safe: 1.0}
@@ -1051,7 +1119,7 @@ def weights_momentum_dinamico_proteccion(df, risky, safe, canary):
                 # Etapa 2b: Asignación Ofensiva
                 risky_scores = {s: momentum_dinamico_score(df_subset, s) for s in risky if s in df_subset.columns}
                 # Filtrar scores válidos
-                valid_risky_scores = {k: v for k, v in risky_scores.items() if not np.isinf(v)}
+                valid_risky_scores = {k: v for k, v in risky_scores.items() if not np.isinf(v) and not np.isnan(v)}
                 if len(valid_risky_scores) >= 5:
                     # Seleccionar los 5 mejores
                     top_5_risky = sorted(valid_risky_scores.items(), key=lambda item: item[1], reverse=True)[:5]
@@ -1070,22 +1138,23 @@ def weights_momentum_dinamico_proteccion(df, risky, safe, canary):
          try:
              df_subset = df
              canary_scores = [momentum_dinamico_score(df_subset, s) for s in canary if s in df_subset.columns]
-             valid_canary_scores = [s for s in canary_scores if not np.isinf(s)]
+             valid_canary_scores = [s for s in canary_scores if not np.isinf(s) and not np.isnan(s)]
              if not valid_canary_scores:
                  avg_canary_score = 0
              else:
                  avg_canary_score = np.mean(valid_canary_scores)
              
              w = {}
-             if avg_canary_score <= 0:
+             # LÓGICA CORREGIDA: Si el score promedio de los canarios es POSITIVO, hay estrés
+             if avg_canary_score > 0:
                  safe_scores = {s: momentum_dinamico_score(df_subset, s) for s in safe if s in df_subset.columns}
-                 valid_safe_scores = {k: v for k, v in safe_scores.items() if not np.isinf(v)}
+                 valid_safe_scores = {k: v for k, v in safe_scores.items() if not np.isinf(v) and not np.isnan(v)}
                  if valid_safe_scores:
                      best_safe = max(valid_safe_scores, key=valid_safe_scores.get)
                      w = {best_safe: 1.0}
              else:
                  risky_scores = {s: momentum_dinamico_score(df_subset, s) for s in risky if s in df_subset.columns}
-                 valid_risky_scores = {k: v for k, v in risky_scores.items() if not np.isinf(v)}
+                 valid_risky_scores = {k: v for k, v in risky_scores.items() if not np.isinf(v) and not np.isnan(v)}
                  if len(valid_risky_scores) >= 5:
                      top_5_risky = sorted(valid_risky_scores.items(), key=lambda item: item[1], reverse=True)[:5]
                      w = {asset: 0.20 for asset, score in top_5_risky}
@@ -1171,8 +1240,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.stop()
         # --- Calcular señales antes de filtrar ---
         last_data_date = df.index.max()
-        # Obtener el último día del mes ANTERIOR al último dato disponible
-        last_month_end_for_real_signal = (last_data_date.replace(day=1) - timedelta(days=1)).replace(day=1) + pd.offsets.MonthEnd(0)
+        # CORREGIDO: Obtener el último día del mes COMPLETO anterior al último dato disponible
+        # Esto asegura que la señal "REAL" se calcule con datos hasta el final del mes anterior
+        # Ejemplo: Si last_data_date es 2025-09-02, last_month_end_for_real_signal será 2025-08-31
+        last_month_end_for_real_signal = (last_data_date.replace(day=1) - timedelta(days=1))
         df_up_to_last_month_end = df[df.index <= last_month_end_for_real_signal]
         df_full = df
         signals_dict_last = {}
