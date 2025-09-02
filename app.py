@@ -1763,5 +1763,3 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.error(f"❌ Error mostrando resultados combinados: {e}")
 else:
     st.info("👈 Configura y ejecuta")
-
-```
