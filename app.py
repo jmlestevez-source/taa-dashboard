@@ -11,9 +11,6 @@ import os
 import pickle
 import hashlib
 
-# Nueva importación para yfinance
-import yfinance as yf
-
 # ------------- CONFIG -------------
 st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
 st.title("🎯 Multi-Strategy Tactical Asset Allocation")
@@ -135,42 +132,9 @@ def get_available_fmp_key():
     st.warning("⚠️ Todas las API keys de FMP han alcanzado el límite diario.")
     return min(FMP_KEYS, key=lambda k: FMP_CALLS[k])
 
-# ------------- DESCARGA (Solo CSV desde GitHub + FMP + yfinance para ^VIX) -------------
+# ------------- DESCARGA (Solo CSV desde GitHub + FMP) -------------
 # Variable global para rastrear errores durante la descarga
 _DOWNLOAD_ERRORS_OCCURRED = False
-
-# --- NUEVA FUNCIÓN PARA DESCARGAR DATOS DE ^VIX CON YFINANCE ---
-def get_yfinance_data_single(ticker, start, end):
-    """Descarga datos usando yfinance para un solo ticker"""
-    global _DOWNLOAD_ERRORS_OCCURRED
-    try:
-        # st.write(f"🔄 Descargando {ticker} desde yfinance...") # Ocultar log
-        # Asegurarse de que las fechas sean datetime.date
-        if isinstance(start, pd.Timestamp):
-            start = start.date()
-        if isinstance(end, pd.Timestamp):
-            end = end.date()
-        
-        # Descargar datos
-        df = yf.download(ticker, start=start, end=end, progress=False)
-        
-        if df is not None and not df.empty:
-            # Seleccionar la columna 'Close' y renombrarla
-            close_series = df['Close'].rename(ticker)
-            # Convertir a DataFrame
-            df_final = close_series.to_frame()
-            # Asegurar que el índice sea datetime
-            df_final.index = pd.to_datetime(df_final.index)
-            # st.write(f"✅ {ticker} descargado desde yfinance - {len(df_final)} registros") # Ocultar log
-            return df_final
-        else:
-            st.warning(f"⚠️ No se obtuvieron datos para {ticker} desde yfinance")
-            _DOWNLOAD_ERRORS_OCCURRED = True
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"❌ Error descargando {ticker} desde yfinance: {e}")
-        _DOWNLOAD_ERRORS_OCCURRED = True
-        return pd.DataFrame()
 
 def should_use_fmp(csv_df, days_threshold=7):
     """Verifica si es necesario usar FMP basado en la frescura de los datos CSV"""
@@ -349,50 +313,21 @@ def download_all_data(tickers, start, end):
     global _DOWNLOAD_ERRORS_OCCURRED
     _DOWNLOAD_ERRORS_OCCURRED = False  # Reiniciar el indicador de errores al inicio
     # st.info("📥 Descargando datos...") # Ocultar log
-    data = {}
-    
-    # Identificar tickers especiales
-    tickers_para_yfinance = [t for t in tickers if t == '^VIX'] # Solo ^VIX por ahora
-    tickers_para_fmp_csv = [t for t in tickers if t not in tickers_para_yfinance]
-    
-    # Descargar tickers especiales con yfinance
-    if tickers_para_yfinance:
-        st.info("📥 Descargando datos especiales desde yfinance...")
-        bar = st.progress(0)
-        total_tickers_yf = len(tickers_para_yfinance)
-        for idx, tk in enumerate(tickers_para_yfinance):
-            try:
-                bar.progress((idx + 1) / total_tickers_yf)
-                df = get_yfinance_data_single(tk, start, end)
-                if not df.empty and len(df) > 0:
-                    data[tk] = df
-                else:
-                    st.warning(f"⚠️ {tk} no disponible desde yfinance")
-                    _DOWNLOAD_ERRORS_OCCURRED = True
-            except Exception as e:
-                st.error(f"❌ Error procesando {tk} desde yfinance: {e}")
+    data, bar = {}, st.progress(0)
+    total_tickers = len(tickers)
+    for idx, tk in enumerate(tickers):
+        try:
+            bar.progress((idx + 1) / total_tickers)
+            df = download_ticker_data(tk, start, end)
+            if not df.empty and len(df) > 0:
+                data[tk] = df
+            else:
+                st.warning(f"⚠️ {tk} no disponible")
                 _DOWNLOAD_ERRORS_OCCURRED = True
-        bar.empty()
-        
-    # Descargar el resto de tickers con el método original (FMP + CSV)
-    if tickers_para_fmp_csv:
-        st.info("📥 Descargando datos restantes desde FMP y CSV...")
-        bar = st.progress(0)
-        total_tickers_fmp = len(tickers_para_fmp_csv)
-        for idx, tk in enumerate(tickers_para_fmp_csv):
-            try:
-                bar.progress((idx + 1) / total_tickers_fmp)
-                df = download_ticker_data(tk, start, end)
-                if not df.empty and len(df) > 0:
-                    data[tk] = df
-                else:
-                    st.warning(f"⚠️ {tk} no disponible")
-                    _DOWNLOAD_ERRORS_OCCURRED = True
-            except Exception as e:
-                st.error(f"❌ Error procesando {tk}: {e}")
-                _DOWNLOAD_ERRORS_OCCURRED = True
-        bar.empty()
-        
+        except Exception as e:
+            st.error(f"❌ Error procesando {tk}: {e}")
+            _DOWNLOAD_ERRORS_OCCURRED = True
+    bar.empty()
     return data
 
 def clean_and_align(data_dict):
@@ -1179,7 +1114,7 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}"
              })
-    if not formatted_data:
+    if not formatted_
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
@@ -1828,3 +1763,5 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.error(f"❌ Error mostrando resultados combinados: {e}")
 else:
     st.info("👈 Configura y ejecuta")
+
+```
