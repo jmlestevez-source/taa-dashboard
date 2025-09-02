@@ -1145,6 +1145,7 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}"
              })
+    # Corrección del error de sintaxis: se completó la condición if
     if not formatted_data:
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
@@ -1206,8 +1207,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.stop()
         # --- Calcular señales antes de filtrar ---
         last_data_date = df.index.max()
-        # Obtener el último día del mes ANTERIOR al último dato disponible
-        last_month_end_for_real_signal = (last_data_date.replace(day=1) - timedelta(days=1)).replace(day=1) + pd.offsets.MonthEnd(0)
+        # CORREGIDO: Obtener el último día del mes COMPLETO anterior al último dato disponible
+        # Esto asegura que la señal "REAL" se calcule con datos hasta el final del mes anterior
+        # Ejemplo: Si last_data_date es 2025-09-02, last_month_end_for_real_signal será 2025-08-31
+        last_month_end_for_real_signal = (last_data_date.replace(day=1) - timedelta(days=1))
         df_up_to_last_month_end = df[df.index <= last_month_end_for_real_signal]
         df_full = df
         signals_dict_last = {}
@@ -1275,9 +1278,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                           ALL_STRATEGIES[s]["canary"],
                                           ALL_STRATEGIES[s]["cash_proxy_candidates"])
                     sig_current = weights_haa(df_full,
-                                           ALL_STRATEGIES[s]["offensive_universe"],
-                                           ALL_STRATEGIES[s]["canary"],
-                                           ALL_STRATEGIES[s]["cash_proxy_candidates"])
+                                             ALL_STRATEGIES[s]["offensive_universe"],
+                                             ALL_STRATEGIES[s]["canary"],
+                                             ALL_STRATEGIES[s]["cash_proxy_candidates"])
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]
                     # st.write(f"📝 Señal REAL para {s}: {sig_last[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
@@ -1305,26 +1308,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.stop()
         # --- cálculo de cartera combinada ---
         try:
-            # Mostrar log de señales para debugging
-            st.subheader("📋 Log de Señales Mensuales (Debug)")
-            for s in active:
-                st.write(f"**{s} - Señales Reales:**")
-                if s in signals_log and signals_log[s]["real"]:
-                    signal_df = pd.DataFrame([
-                        {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}
-                        for sig in signals_log[s]["real"]
-                    ])
-                    st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
-                else:
-                    st.write("No hay señales disponibles")
-                st.write(f"**{s} - Señal Hipotética Actual:**")
-                if s in signals_log and signals_log[s]["hypothetical"]:
-                    hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
-                    # Corrección: Convertir Timestamp a string si es necesario
-                    fecha_str = hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else str(hyp_signal[0])
-                    st.write(f"Fecha: {fecha_str}")
-                    st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
-                st.markdown("---")
             # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
             if len(df_filtered) < 13:
                 st.error("❌ No hay suficientes datos en el rango filtrado.")
@@ -1365,9 +1348,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                                                        ALL_STRATEGIES[s]["secondary"])
                 elif s == "HAA": # Integración de la nueva estrategia
                     strategy_signals[s] = weights_haa(df_filtered,
-                                                     ALL_STRATEGIES[s]["offensive_universe"],
-                                                     ALL_STRATEGIES[s]["canary"],
-                                                     ALL_STRATEGIES[s]["cash_proxy_candidates"])
+                                                   ALL_STRATEGIES[s]["offensive_universe"],
+                                                   ALL_STRATEGIES[s]["canary"],
+                                                   ALL_STRATEGIES[s]["cash_proxy_candidates"])
             # 2. Preparar estructura para la cartera combinada
             rebalance_dates = [sig[0] for sig in strategy_signals[active[0]]] if active and strategy_signals.get(active[0]) else []
             if not rebalance_dates:
@@ -1478,9 +1461,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                                              ALL_STRATEGIES[s]["secondary"])
                  elif s == "HAA": # Integración de la nueva estrategia
                      sig_list = weights_haa(df_filtered,
-                                           ALL_STRATEGIES[s]["offensive_universe"],
-                                           ALL_STRATEGIES[s]["canary"],
-                                           ALL_STRATEGIES[s]["cash_proxy_candidates"])
+                                          ALL_STRATEGIES[s]["offensive_universe"],
+                                          ALL_STRATEGIES[s]["canary"],
+                                          ALL_STRATEGIES[s]["cash_proxy_candidates"])
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
                  signals_dict_ind = {sig[0]: sig[1] for sig in sig_list}
                  if not rebalance_dates_ind:
@@ -1516,8 +1499,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
         # ---------- MOSTRAR RESULTADOS ----------
         try:
-            tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
+            # Determinar nombres de pestañas, incluyendo la nueva pestaña de logs
+            tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active] + ["📝 Log de Señales"]
             tabs = st.tabs(tab_names)
+            
             # ---- TAB 0: COMBINADA ----
             with tabs[0]:
                 col1, col2 = st.columns(2)
@@ -1589,14 +1574,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.subheader("📅 Retornos Mensuales por Año")
                 try:
                     # Obtener retornos mensuales para la cartera combinada
-                    returns = comb_series.pct_change().dropna()
-                    if not returns.empty:
+                    # CORRECCIÓN: Usar resample('ME').last() para obtener el último valor de cada mes
+                    # y luego calcular pct_change() para obtener el retorno mensual real
+                    returns_monthly = comb_series.resample('ME').last().pct_change().dropna()
+                    if not returns_monthly.empty:
                         # Asegurarse de que el índice sea de tipo datetime
-                        returns.index = pd.to_datetime(returns.index)
-                        # Resamplear a fin de mes para asegurar consistencia
-                        returns = returns.resample('ME').last()
+                        returns_monthly.index = pd.to_datetime(returns_monthly.index)
                         # Crear un DataFrame con los retornos y una columna auxiliar para el año
-                        returns_df = pd.DataFrame({'Return': returns, 'Year': returns.index.year})
+                        returns_df = pd.DataFrame({'Return': returns_monthly, 'Year': returns_monthly.index.year})
                         # Agrupar por año
                         yearly_groups = returns_df.groupby('Year')
                         # Formatear para tabla
@@ -1612,6 +1597,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             # Crear un diccionario para acceder rápidamente a los retornos por mes
                             # Usamos el número del mes (1-12) como clave
                             monthly_returns_for_year = {row_index.month: row_data['Return'] for row_index, row_data in year_data.iterrows()}
+                            # Calcular el total anual sumando los retornos mensuales (+1)
+                            annual_return_total = 1.0
+                            for month in range(1, 13):
+                                if month in monthly_returns_for_year:
+                                    monthly_ret = monthly_returns_for_year[month]
+                                    annual_return_total *= (1 + monthly_ret)
+                            # Convertir el total acumulado a un retorno porcentual
+                            annual_return_percentage = (annual_return_total - 1) * 100
                             # Iterar sobre cada mes (1 a 12)
                             for month in range(1, 13):
                                 if month in monthly_returns_for_year:
@@ -1622,9 +1615,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                 else:
                                     # Si no hay dato para ese mes, dejar celda vacía
                                     row.append("")
+                            # Añadir el total anual al final de la fila
+                            row.append(f"{annual_return_percentage:+.1f}%")
                             table_data.append(row)
                         # Crear DataFrame para la tabla
-                        columns = ['Año'] + month_columns
+                        columns = ['Año'] + month_columns + ['Total Anual (%)']
                         df_table = pd.DataFrame(table_data, columns=columns)
                         # Aplicar estilos condicionales
                         def color_cells(val):
@@ -1710,14 +1705,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             st.subheader("📅 Retornos Mensuales por Año")
                             try:
                                 # Obtener retornos mensuales para esta estrategia
-                                returns = ser.pct_change().dropna()
-                                if not returns.empty:
+                                # CORRECCIÓN: Usar resample('ME').last() para obtener el último valor de cada mes
+                                # y luego calcular pct_change() para obtener el retorno mensual real
+                                returns_monthly = ser.resample('ME').last().pct_change().dropna()
+                                if not returns_monthly.empty:
                                     # Asegurarse de que el índice sea de tipo datetime
-                                    returns.index = pd.to_datetime(returns.index)
-                                    # Resamplear a fin de mes para asegurar consistencia
-                                    returns = returns.resample('ME').last()
+                                    returns_monthly.index = pd.to_datetime(returns_monthly.index)
                                     # Crear un DataFrame con los retornos y una columna auxiliar para el año
-                                    returns_df = pd.DataFrame({'Return': returns, 'Year': returns.index.year})
+                                    returns_df = pd.DataFrame({'Return': returns_monthly, 'Year': returns_monthly.index.year})
                                     # Agrupar por año
                                     yearly_groups = returns_df.groupby('Year')
                                     # Formatear para tabla
@@ -1733,6 +1728,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                         # Crear un diccionario para acceder rápidamente a los retornos por mes
                                         # Usamos el número del mes (1-12) como clave
                                         monthly_returns_for_year = {row_index.month: row_data['Return'] for row_index, row_data in year_data.iterrows()}
+                                        # Calcular el total anual sumando los retornos mensuales (+1)
+                                        annual_return_total = 1.0
+                                        for month in range(1, 13):
+                                            if month in monthly_returns_for_year:
+                                                monthly_ret = monthly_returns_for_year[month]
+                                                annual_return_total *= (1 + monthly_ret)
+                                        # Convertir el total acumulado a un retorno porcentual
+                                        annual_return_percentage = (annual_return_total - 1) * 100
                                         # Iterar sobre cada mes (1 a 12)
                                         for month in range(1, 13):
                                             if month in monthly_returns_for_year:
@@ -1743,9 +1746,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                             else:
                                                 # Si no hay dato para ese mes, dejar celda vacía
                                                 row.append("")
+                                        # Añadir el total anual al final de la fila
+                                        row.append(f"{annual_return_percentage:+.1f}%")
                                         table_data.append(row)
                                     # Crear DataFrame para la tabla
-                                    columns = ['Año'] + month_columns
+                                    columns = ['Año'] + month_columns + ['Total Anual (%)']
                                     df_table = pd.DataFrame(table_data, columns=columns)
                                     # Aplicar estilos condicionales (misma función que antes)
                                     def color_cells(val):
@@ -1788,6 +1793,30 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             st.write("No hay datos disponibles para esta estrategia.")
                 except Exception as e:
                     st.error(f"❌ Error en pestaña {s}: {e}")
+            
+            # ---- NUEVA PESTAÑA: LOG DE SEÑALES ----
+            with tabs[-1]: # Acceder a la última pestaña creada
+                st.header("📝 Log de Señales Mensuales")
+                # Mostrar log de señales para debugging
+                for s in active:
+                    st.subheader(f"**{s} - Señales Reales:**")
+                    if s in signals_log and signals_log[s]["real"]:
+                        signal_df = pd.DataFrame([
+                            {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}
+                            for sig in signals_log[s]["real"]
+                        ])
+                        st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
+                    else:
+                        st.write("No hay señales disponibles")
+                    st.subheader(f"**{s} - Señal Hipotética Actual:**")
+                    if s in signals_log and signals_log[s]["hypothetical"]:
+                        hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
+                        # Corrección: Convertir Timestamp a string si es necesario
+                        fecha_str = hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else str(hyp_signal[0])
+                        st.write(f"Fecha: {fecha_str}")
+                        st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
+                    st.markdown("---")
+                    
         except Exception as e:
             st.error(f"❌ Error mostrando resultados combinados: {e}")
 else:
