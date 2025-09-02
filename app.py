@@ -11,9 +11,6 @@ import os
 import pickle
 import hashlib
 
-# Nueva importación para yfinance
-import yfinance as yf
-
 # ------------- CONFIG -------------
 st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
 st.title("🎯 Multi-Strategy Tactical Asset Allocation")
@@ -67,18 +64,11 @@ SISTEMA_DESCORRELACION = {
     "main": ['VTI', 'GLD', 'TLT'],
     "secondary": ['SPY', 'QQQ', 'MDY', 'EFA']
 }
-# Nueva estrategia: Momentum Dinámico con Protección
-MOMENTUM_DINAMICO_PROTECCION = {
-    "risky": ['SPY', 'QQQ', 'EFA', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'HYG', 'LQD'],
-    "safe": ['SHY', 'IEF', 'LQD', 'BIL'],
-    "canary": ['^VIX', 'EEM'] # ^VIX para estrés, EEM como canario global
-}
-# Nueva estrategia: Adaptive Asset Allocation
-ADAPTIVE_ASSET_ALLOCATION = {
-    "assets": ['SPY', 'IEV', 'EWJ', 'EEM', 'VNQ', 'IEF', 'TLT', 'DBC', 'GLD', 'TLT'], # 10 asset classes
-    "lookback_period": 126, # 6 months (126 trading days)
-    "holding_period": 21, # Approx. 1 month (21 trading days)
-    "num_assets": 5 # Half of the portfolio
+# Nueva estrategia: HAA (Hybrid Adaptive Asset Allocation)
+HAA = {
+    "offensive_universe": ['SPY', 'IWM', 'EFA', 'EEM', 'VNQ', 'DBC', 'IEF', 'TLT'],
+    "canary": ['TIP'],
+    "cash_proxy_candidates": ['IEF', 'BIL'] # Para representar efectivo y alternativas defensivas
 }
 
 ALL_STRATEGIES = {
@@ -90,8 +80,7 @@ ALL_STRATEGIES = {
     "Quint Switching Filtered": QUINT_SWITCHING_FILTERED,
     "BAA Aggressive": BAA_AGGRESSIVE,
     "Sistema Descorrelación": SISTEMA_DESCORRELACION,
-    "Momentum Dinámico con Protección": MOMENTUM_DINAMICO_PROTECCION, # Añadida la nueva estrategia
-    "Adaptive Asset Allocation": ADAPTIVE_ASSET_ALLOCATION # Añadida la nueva estrategia
+    "HAA": HAA # Añadida la nueva estrategia
 }
 
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
@@ -143,42 +132,9 @@ def get_available_fmp_key():
     st.warning("⚠️ Todas las API keys de FMP han alcanzado el límite diario.")
     return min(FMP_KEYS, key=lambda k: FMP_CALLS[k])
 
-# ------------- DESCARGA (Solo CSV desde GitHub + FMP + yfinance para ^VIX) -------------
+# ------------- DESCARGA (Solo CSV desde GitHub + FMP) -------------
 # Variable global para rastrear errores durante la descarga
 _DOWNLOAD_ERRORS_OCCURRED = False
-
-# --- NUEVA FUNCIÓN PARA DESCARGAR DATOS DE ^VIX CON YFINANCE ---
-def get_yfinance_data_single(ticker, start, end):
-    """Descarga datos usando yfinance para un solo ticker"""
-    global _DOWNLOAD_ERRORS_OCCURRED
-    try:
-        # st.write(f"🔄 Descargando {ticker} desde yfinance...") # Ocultar log
-        # Asegurarse de que las fechas sean datetime.date
-        if isinstance(start, pd.Timestamp):
-            start = start.date()
-        if isinstance(end, pd.Timestamp):
-            end = end.date()
-        
-        # Descargar datos
-        df = yf.download(ticker, start=start, end=end, progress=False)
-        
-        if df is not None and not df.empty:
-            # Seleccionar la columna 'Close' y renombrarla
-            close_series = df['Close'].rename(ticker)
-            # Convertir a DataFrame
-            df_final = close_series.to_frame()
-            # Asegurar que el índice sea datetime
-            df_final.index = pd.to_datetime(df_final.index)
-            # st.write(f"✅ {ticker} descargado desde yfinance - {len(df_final)} registros") # Ocultar log
-            return df_final
-        else:
-            st.warning(f"⚠️ No se obtuvieron datos para {ticker} desde yfinance")
-            _DOWNLOAD_ERRORS_OCCURRED = True
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"❌ Error descargando {ticker} desde yfinance: {e}")
-        _DOWNLOAD_ERRORS_OCCURRED = True
-        return pd.DataFrame()
 
 def should_use_fmp(csv_df, days_threshold=7):
     """Verifica si es necesario usar FMP basado en la frescura de los datos CSV"""
@@ -514,217 +470,31 @@ def momentum_score_13612w(df, symbol):
     except Exception:
         return 0
 
-# Función auxiliar para Momentum Dinámico con Protección
-def momentum_dinamico_score(df, symbol):
-    """Calcula el score de Momentum Dinámico: (ROC_6M - ROC_12M) / Volatilidad_12M"""
-    if len(df) < 13: # Necesita al menos 13 meses para ROC_12M y Vol_12M
+# Nueva función auxiliar para HAA
+def haa_momentum_score(df, symbol):
+    """Calcula el momentum score HAA: media no ponderada de ROC_1M, ROC_3M, ROC_6M, ROC_12M"""
+    if len(df) < 13: # Necesita al menos 13 meses para ROC_12M
         return float('-inf')
     try:
-        p0 = df[symbol].iloc[-1]
-        p6 = df[symbol].iloc[-7]
-        p12 = df[symbol].iloc[-13]
+        p0 = df[symbol].iloc[-1]   # Precio actual
+        p1 = df[symbol].iloc[-2]   # Hace 1 mes
+        p3 = df[symbol].iloc[-4]   # Hace 3 meses
+        p6 = df[symbol].iloc[-7]   # Hace 6 meses
+        p12 = df[symbol].iloc[-13] # Hace 12 meses
         
-        if p6 <= 0 or p12 <= 0:
+        if p1 <= 0 or p3 <= 0 or p6 <= 0 or p12 <= 0:
             return float('-inf')
+            
+        roc_1 = (p0 / p1) - 1
+        roc_3 = (p0 / p3) - 1
+        roc_6 = (p0 / p6) - 1
+        roc_12 = (p0 / p12) - 1
         
-        roc_6m = (p0 / p6) - 1
-        roc_12m = (p0 / p12) - 1
-        
-        # Calcular volatilidad de los últimos 12 meses (12 retornos mensuales)
-        returns_12m = df[symbol].pct_change().iloc[-12:]
-        if len(returns_12m) < 2 or returns_12m.isnull().any() or (returns_12m == 0).all():
-            return float('-inf')
-        vol_12m = returns_12m.std()
-        
-        if vol_12m == 0 or pd.isna(vol_12m):
-            return float('-inf')
-        
-        score = (roc_6m - roc_12m) / vol_12m
+        # Media no ponderada
+        score = (roc_1 + roc_3 + roc_6 + roc_12) / 4
         return score
     except Exception:
         return float('-inf')
-
-# Función auxiliar para Adaptive Asset Allocation
-def adaptive_asset_allocation_weights(df, assets, lookback_period, holding_period, num_assets):
-    """Calcula pesos para Adaptive Asset Allocation"""
-    if len(df) < lookback_period:
-        return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
-    sig = []
-    for i in range(lookback_period, len(df)):
-        try:
-            df_subset = df.iloc[:i]
-            # Calcular retornos de 6 meses (126 días)
-            returns_6m = df_subset.pct_change(periods=lookback_period).dropna()
-            if len(returns_6m) < 1:
-                continue
-            
-            # Obtener los últimos retornos de 6 meses
-            latest_returns = returns_6m.iloc[-1]
-            
-            # Filtrar activos válidos
-            valid_assets = [a for a in assets if a in latest_returns.index and not pd.isna(latest_returns[a])]
-            
-            if len(valid_assets) < num_assets:
-                # Si no hay suficientes activos válidos, asignar igualmente
-                w = {a: 1.0/len(valid_assets) for a in valid_assets} if valid_assets else {}
-                sig.append((df.index[i], w))
-                continue
-            
-            # Seleccionar los 5 activos con mejor retorno de 6 meses
-            top_assets = sorted(valid_assets, key=lambda a: latest_returns[a], reverse=True)[:num_assets]
-            
-            # Calcular matriz de covarianza ponderada
-            # Usar retornos diarios de los últimos 126 días para correlación
-            recent_returns = df_subset[valid_assets].pct_change().iloc[-lookback_period:].dropna()
-            if len(recent_returns) < 2:
-                # Si no hay suficientes datos para covarianza, asignar igualmente
-                w = {a: 1.0/len(top_assets) for a in top_assets}
-                sig.append((df.index[i], w))
-                continue
-            
-            # Calcular volatilidad de 20 días para cada activo
-            vol_20d = recent_returns.iloc[-20:].std()
-            if vol_20d.isnull().any() or (vol_20d == 0).any():
-                # Si hay problemas con la volatilidad, asignar igualmente
-                w = {a: 1.0/len(top_assets) for a in top_assets}
-                sig.append((df.index[i], w))
-                continue
-            
-            # Calcular matriz de correlación de 126 días
-            corr_matrix = recent_returns.corr()
-            if corr_matrix.isnull().any().any():
-                # Si hay problemas con la correlación, asignar igualmente
-                w = {a: 1.0/len(top_assets) for a in top_assets}
-                sig.append((df.index[i], w))
-                continue
-            
-            # Crear matriz de covarianza ponderada
-            cov_matrix = corr_matrix.mul(np.outer(vol_20d, vol_20d))
-            
-            # Filtrar la matriz de covarianza para los activos seleccionados
-            selected_cov_matrix = cov_matrix.loc[top_assets, top_assets]
-            
-            # Optimización de mínima varianza
-            try:
-                # Resolver el problema de optimización cuadrática
-                # Minimizar w^T * Σ * w sujeto a sum(w) = 1 y w >= 0
-                from scipy.optimize import minimize
-                
-                def objective(weights, cov_matrix):
-                    return np.dot(weights.T, np.dot(cov_matrix, weights))
-                
-                def constraint_sum(weights):
-                    return np.sum(weights) - 1
-                
-                n_assets = len(top_assets)
-                initial_weights = np.array([1/n_assets] * n_assets)
-                bounds = tuple((0, 1) for _ in range(n_assets))
-                constraints = [{'type': 'eq', 'fun': constraint_sum}]
-                
-                result = minimize(objective, initial_weights, args=(selected_cov_matrix.values,), 
-                                method='SLSQP', bounds=bounds, constraints=constraints)
-                
-                if result.success:
-                    optimal_weights = result.x
-                    w = dict(zip(top_assets, optimal_weights))
-                else:
-                    # Si la optimización falla, asignar igualmente
-                    w = {a: 1.0/len(top_assets) for a in top_assets}
-            except ImportError:
-                # Si scipy no está disponible, asignar igualmente
-                w = {a: 1.0/len(top_assets) for a in top_assets}
-            except Exception:
-                # Si hay otros errores en la optimización, asignar igualmente
-                w = {a: 1.0/len(top_assets) for a in top_assets}
-            
-            sig.append((df.index[i], w))
-        except Exception as e:
-            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
-    
-    # Señal para el último periodo
-    if len(df) >= lookback_period:
-        try:
-            df_subset = df
-            # Calcular retornos de 6 meses (126 días)
-            returns_6m = df_subset.pct_change(periods=lookback_period).dropna()
-            if len(returns_6m) >= 1:
-                # Obtener los últimos retornos de 6 meses
-                latest_returns = returns_6m.iloc[-1]
-                
-                # Filtrar activos válidos
-                valid_assets = [a for a in assets if a in latest_returns.index and not pd.isna(latest_returns[a])]
-                
-                if len(valid_assets) >= num_assets:
-                    # Seleccionar los 5 activos con mejor retorno de 6 meses
-                    top_assets = sorted(valid_assets, key=lambda a: latest_returns[a], reverse=True)[:num_assets]
-                    
-                    # Calcular matriz de covarianza ponderada
-                    # Usar retornos diarios de los últimos 126 días para correlación
-                    recent_returns = df_subset[valid_assets].pct_change().iloc[-lookback_period:].dropna()
-                    if len(recent_returns) >= 2:
-                        # Calcular volatilidad de 20 días para cada activo
-                        vol_20d = recent_returns.iloc[-20:].std()
-                        if not vol_20d.isnull().any() and not (vol_20d == 0).any():
-                            # Calcular matriz de correlación de 126 días
-                            corr_matrix = recent_returns.corr()
-                            if not corr_matrix.isnull().any().any():
-                                # Crear matriz de covarianza ponderada
-                                cov_matrix = corr_matrix.mul(np.outer(vol_20d, vol_20d))
-                                
-                                # Filtrar la matriz de covarianza para los activos seleccionados
-                                selected_cov_matrix = cov_matrix.loc[top_assets, top_assets]
-                                
-                                # Optimización de mínima varianza
-                                try:
-                                    from scipy.optimize import minimize
-                                    
-                                    def objective(weights, cov_matrix):
-                                        return np.dot(weights.T, np.dot(cov_matrix, weights))
-                                    
-                                    def constraint_sum(weights):
-                                        return np.sum(weights) - 1
-                                    
-                                    n_assets = len(top_assets)
-                                    initial_weights = np.array([1/n_assets] * n_assets)
-                                    bounds = tuple((0, 1) for _ in range(n_assets))
-                                    constraints = [{'type': 'eq', 'fun': constraint_sum}]
-                                    
-                                    result = minimize(objective, initial_weights, args=(selected_cov_matrix.values,), 
-                                                    method='SLSQP', bounds=bounds, constraints=constraints)
-                                    
-                                    if result.success:
-                                        optimal_weights = result.x
-                                        w = dict(zip(top_assets, optimal_weights))
-                                    else:
-                                        # Si la optimización falla, asignar igualmente
-                                        w = {a: 1.0/len(top_assets) for a in top_assets}
-                                except ImportError:
-                                    # Si scipy no está disponible, asignar igualmente
-                                    w = {a: 1.0/len(top_assets) for a in top_assets}
-                                except Exception:
-                                    # Si hay otros errores en la optimización, asignar igualmente
-                                    w = {a: 1.0/len(top_assets) for a in top_assets}
-                            else:
-                                # Si hay problemas con la correlación, asignar igualmente
-                                w = {a: 1.0/len(top_assets) for a in top_assets}
-                        else:
-                            # Si hay problemas con la volatilidad, asignar igualmente
-                            w = {a: 1.0/len(top_assets) for a in top_assets}
-                    else:
-                        # Si no hay suficientes datos para covarianza, asignar igualmente
-                        w = {a: 1.0/len(top_assets) for a in top_assets}
-                else:
-                    # Si no hay suficientes activos válidos, asignar igualmente
-                    w = {a: 1.0/len(valid_assets) for a in valid_assets} if valid_assets else {}
-            else:
-                w = {}
-            
-            sig.append((df.index[-1], w))
-        except Exception as e:
-            sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
-    
-    sig = list({s[0]: s for s in sig}.values()) # Eliminar duplicados
-    return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def calc_metrics(rets):
     rets = rets.dropna()
@@ -1244,52 +1014,64 @@ def weights_sistema_descorrelacion(df, main, secondary):
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
-# Nueva función para Momentum Dinámico con Protección
-def weights_momentum_dinamico_proteccion(df, risky, safe, canary):
-    """Calcula señales para Momentum Dinámico con Protección"""
-    if len(df) < 13: # Necesita al menos 13 meses para ROC 12M
+# Nueva función para HAA
+def weights_haa(df, offensive_universe, canary, cash_proxy_candidates):
+    """Calcula señales para HAA (Hybrid Adaptive Asset Allocation)"""
+    if len(df) < 13:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
     for i in range(13, len(df)):
         try:
             df_subset = df.iloc[:i]
-            # Etapa 1: Evaluar Canarios
-            canary_scores = [momentum_dinamico_score(df_subset, s) for s in canary if s in df_subset.columns]
-            # Filtrar scores válidos
-            valid_canary_scores = [s for s in canary_scores if not np.isinf(s) and not np.isnan(s)]
-            if not valid_canary_scores:
-                # Si no hay scores válidos, asumir mercado normal
-                avg_canary_score = 0
+            # Etapa 1: Evaluar el canario TIPS
+            if canary and len(canary) > 0:
+                tip_symbol = canary[0] # Asumimos que el primer elemento es TIP
+                if tip_symbol in df_subset.columns:
+                    tip_momentum = haa_momentum_score(df_subset, tip_symbol)
+                else:
+                    # Si no hay datos de TIP, asumimos mercado normal
+                    tip_momentum = 0
             else:
-                avg_canary_score = np.mean(valid_canary_scores)
+                tip_momentum = 0 # Fallback
             
             w = {}
-            # LÓGICA CORREGIDA: Si el score promedio de los canarios es POSITIVO, hay estrés
-            # ^VIX positivo = estrés. TLT positivo = puede ser estrés (búsqueda de refugio) o bonificación.
-            # El promedio positivo refuerza la señal de estrés.
-            if avg_canary_score > 0: # Mercado en estrés
-                # Etapa 2a: Asignación Defensiva
-                safe_scores = {s: momentum_dinamico_score(df_subset, s) for s in safe if s in df_subset.columns}
+            if tip_momentum > 0: # Etapa 2a: Modo Ofensivo
+                # Calcular momentum para el universo ofensivo
+                offensive_momentum = {s: haa_momentum_score(df_subset, s) for s in offensive_universe if s in df_subset.columns}
                 # Filtrar scores válidos
-                valid_safe_scores = {k: v for k, v in safe_scores.items() if not np.isinf(v) and not np.isnan(v)}
-                if valid_safe_scores:
-                    best_safe = max(valid_safe_scores, key=valid_safe_scores.get)
-                    w = {best_safe: 1.0}
-                # Si no hay activos seguros válidos, w queda vacío (efectivo)
-            else: # Mercado normal
-                # Etapa 2b: Asignación Ofensiva
-                risky_scores = {s: momentum_dinamico_score(df_subset, s) for s in risky if s in df_subset.columns}
-                # Filtrar scores válidos
-                valid_risky_scores = {k: v for k, v in risky_scores.items() if not np.isinf(v) and not np.isnan(v)}
-                if len(valid_risky_scores) >= 5:
-                    # Seleccionar los 5 mejores
-                    top_5_risky = sorted(valid_risky_scores.items(), key=lambda item: item[1], reverse=True)[:5]
-                    w = {asset: 0.20 for asset, score in top_5_risky}
-                elif valid_risky_scores:
-                    # Si hay menos de 5, invertir en los disponibles
-                    n_avail = len(valid_risky_scores)
-                    w = {asset: 1.0 / n_avail for asset in valid_risky_scores.keys()}
-                # Si no hay activos riesgosos válidos, w queda vacío (efectivo)
+                valid_offensive_momentum = {k: v for k, v in offensive_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                if len(valid_offensive_momentum) >= 4:
+                    # Seleccionar los 4 con mejor momentum
+                    top_4_offensive = sorted(valid_offensive_momentum.items(), key=lambda item: item[1], reverse=True)[:4]
+                    # Asignar 25% a cada uno si su momentum es positivo, sino ir a efectivo
+                    # Determinar el mejor proxy de efectivo
+                    cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
+                    valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                    if valid_cash_proxy_momentum:
+                        best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
+                    else:
+                        best_cash_proxy = 'BIL' # Default
+                    
+                    for asset, momentum_score in top_4_offensive:
+                        if momentum_score > 0:
+                            w[asset] = w.get(asset, 0) + 0.25
+                        else:
+                            # Si el momentum es negativo, asignar a efectivo
+                            w[best_cash_proxy] = w.get(best_cash_proxy, 0) + 0.25
+                # Si hay menos de 4 activos válidos, se podría manejar de otra forma,
+                # pero por simplicidad dejamos la cartera vacía o con efectivo.
+                            
+            else: # Etapa 2b: Modo Defensivo
+                # Asignar 100% al mejor activo entre los candidatos a efectivo
+                cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
+                valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                if valid_cash_proxy_momentum:
+                    best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
+                    w[best_cash_proxy] = 1.0
+                else:
+                    # Si no hay proxies de efectivo válidos, asignar a BIL por defecto
+                    w['BIL'] = 1.0
+                    
             sig.append((df.index[i], w))
         except Exception as e:
             sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
@@ -1298,215 +1080,56 @@ def weights_momentum_dinamico_proteccion(df, risky, safe, canary):
     if len(df) >= 13:
          try:
              df_subset = df
-             canary_scores = [momentum_dinamico_score(df_subset, s) for s in canary if s in df_subset.columns]
-             valid_canary_scores = [s for s in canary_scores if not np.isinf(s) and not np.isnan(s)]
-             if not valid_canary_scores:
-                 avg_canary_score = 0
+             # Etapa 1: Evaluar el canario TIPS
+             if canary and len(canary) > 0:
+                 tip_symbol = canary[0] # Asumimos que el primer elemento es TIP
+                 if tip_symbol in df_subset.columns:
+                     tip_momentum = haa_momentum_score(df_subset, tip_symbol)
+                 else:
+                     # Si no hay datos de TIP, asumimos mercado normal
+                     tip_momentum = 0
              else:
-                 avg_canary_score = np.mean(valid_canary_scores)
+                 tip_momentum = 0 # Fallback
              
              w = {}
-             # LÓGICA CORREGIDA: Si el score promedio de los canarios es POSITIVO, hay estrés
-             if avg_canary_score > 0:
-                 safe_scores = {s: momentum_dinamico_score(df_subset, s) for s in safe if s in df_subset.columns}
-                 valid_safe_scores = {k: v for k, v in safe_scores.items() if not np.isinf(v) and not np.isnan(v)}
-                 if valid_safe_scores:
-                     best_safe = max(valid_safe_scores, key=valid_safe_scores.get)
-                     w = {best_safe: 1.0}
-             else:
-                 risky_scores = {s: momentum_dinamico_score(df_subset, s) for s in risky if s in df_subset.columns}
-                 valid_risky_scores = {k: v for k, v in risky_scores.items() if not np.isinf(v) and not np.isnan(v)}
-                 if len(valid_risky_scores) >= 5:
-                     top_5_risky = sorted(valid_risky_scores.items(), key=lambda item: item[1], reverse=True)[:5]
-                     w = {asset: 0.20 for asset, score in top_5_risky}
-                 elif valid_risky_scores:
-                     n_avail = len(valid_risky_scores)
-                     w = {asset: 1.0 / n_avail for asset in valid_risky_scores.keys()}
+             if tip_momentum > 0: # Etapa 2a: Modo Ofensivo
+                 # Calcular momentum para el universo ofensivo
+                 offensive_momentum = {s: haa_momentum_score(df_subset, s) for s in offensive_universe if s in df_subset.columns}
+                 # Filtrar scores válidos
+                 valid_offensive_momentum = {k: v for k, v in offensive_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                 if len(valid_offensive_momentum) >= 4:
+                     # Seleccionar los 4 con mejor momentum
+                     top_4_offensive = sorted(valid_offensive_momentum.items(), key=lambda item: item[1], reverse=True)[:4]
+                     # Asignar 25% a cada uno si su momentum es positivo, sino ir a efectivo
+                     # Determinar el mejor proxy de efectivo
+                     cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
+                     valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                     if valid_cash_proxy_momentum:
+                         best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
+                     else:
+                         best_cash_proxy = 'BIL' # Default
+                     
+                     for asset, momentum_score in top_4_offensive:
+                         if momentum_score > 0:
+                             w[asset] = w.get(asset, 0) + 0.25
+                         else:
+                             # Si el momentum es negativo, asignar a efectivo
+                             w[best_cash_proxy] = w.get(best_cash_proxy, 0) + 0.25
+                             
+             else: # Etapa 2b: Modo Defensivo
+                 # Asignar 100% al mejor activo entre los candidatos a efectivo
+                 cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
+                 valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                 if valid_cash_proxy_momentum:
+                     best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
+                     w[best_cash_proxy] = 1.0
+                 else:
+                     # Si no hay proxies de efectivo válidos, asignar a BIL por defecto
+                     w['BIL'] = 1.0
+                     
              sig.append((df.index[-1], w))
          except Exception as e:
              sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
-    
-    sig = list({s[0]: s for s in sig}.values()) # Eliminar duplicados
-    return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
-
-# Nueva función para Adaptive Asset Allocation
-def weights_adaptive_asset_allocation(df, assets, lookback_period, holding_period, num_assets):
-    """Calcula señales para Adaptive Asset Allocation"""
-    if len(df) < lookback_period:
-        return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
-    sig = []
-    for i in range(lookback_period, len(df)):
-        try:
-            df_subset = df.iloc[:i]
-            # Calcular retornos de 6 meses (126 días)
-            returns_6m = df_subset.pct_change(periods=lookback_period).dropna()
-            if len(returns_6m) < 1:
-                continue
-            
-            # Obtener los últimos retornos de 6 meses
-            latest_returns = returns_6m.iloc[-1]
-            
-            # Filtrar activos válidos
-            valid_assets = [a for a in assets if a in latest_returns.index and not pd.isna(latest_returns[a])]
-            
-            if len(valid_assets) < num_assets:
-                # Si no hay suficientes activos válidos, asignar igualmente
-                w = {a: 1.0/len(valid_assets) for a in valid_assets} if valid_assets else {}
-                sig.append((df.index[i], w))
-                continue
-            
-            # Seleccionar los 5 activos con mejor retorno de 6 meses
-            top_assets = sorted(valid_assets, key=lambda a: latest_returns[a], reverse=True)[:num_assets]
-            
-            # Calcular matriz de covarianza ponderada
-            # Usar retornos diarios de los últimos 126 días para correlación
-            recent_returns = df_subset[valid_assets].pct_change().iloc[-lookback_period:].dropna()
-            if len(recent_returns) < 2:
-                # Si no hay suficientes datos para covarianza, asignar igualmente
-                w = {a: 1.0/len(top_assets) for a in top_assets}
-                sig.append((df.index[i], w))
-                continue
-            
-            # Calcular volatilidad de 20 días para cada activo
-            vol_20d = recent_returns.iloc[-20:].std()
-            if vol_20d.isnull().any() or (vol_20d == 0).any():
-                # Si hay problemas con la volatilidad, asignar igualmente
-                w = {a: 1.0/len(top_assets) for a in top_assets}
-                sig.append((df.index[i], w))
-                continue
-            
-            # Calcular matriz de correlación de 126 días
-            corr_matrix = recent_returns.corr()
-            if corr_matrix.isnull().any().any():
-                # Si hay problemas con la correlación, asignar igualmente
-                w = {a: 1.0/len(top_assets) for a in top_assets}
-                sig.append((df.index[i], w))
-                continue
-            
-            # Crear matriz de covarianza ponderada
-            cov_matrix = corr_matrix.mul(np.outer(vol_20d, vol_20d))
-            
-            # Filtrar la matriz de covarianza para los activos seleccionados
-            selected_cov_matrix = cov_matrix.loc[top_assets, top_assets]
-            
-            # Optimización de mínima varianza
-            try:
-                # Resolver el problema de optimización cuadrática
-                # Minimizar w^T * Σ * w sujeto a sum(w) = 1 y w >= 0
-                from scipy.optimize import minimize
-                
-                def objective(weights, cov_matrix):
-                    return np.dot(weights.T, np.dot(cov_matrix, weights))
-                
-                def constraint_sum(weights):
-                    return np.sum(weights) - 1
-                
-                n_assets = len(top_assets)
-                initial_weights = np.array([1/n_assets] * n_assets)
-                bounds = tuple((0, 1) for _ in range(n_assets))
-                constraints = [{'type': 'eq', 'fun': constraint_sum}]
-                
-                result = minimize(objective, initial_weights, args=(selected_cov_matrix.values,), 
-                                method='SLSQP', bounds=bounds, constraints=constraints)
-                
-                if result.success:
-                    optimal_weights = result.x
-                    w = dict(zip(top_assets, optimal_weights))
-                else:
-                    # Si la optimización falla, asignar igualmente
-                    w = {a: 1.0/len(top_assets) for a in top_assets}
-            except ImportError:
-                # Si scipy no está disponible, asignar igualmente
-                w = {a: 1.0/len(top_assets) for a in top_assets}
-            except Exception:
-                # Si hay otros errores en la optimización, asignar igualmente
-                w = {a: 1.0/len(top_assets) for a in top_assets}
-            
-            sig.append((df.index[i], w))
-        except Exception as e:
-            sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
-    
-    # Señal para el último periodo
-    if len(df) >= lookback_period:
-        try:
-            df_subset = df
-            # Calcular retornos de 6 meses (126 días)
-            returns_6m = df_subset.pct_change(periods=lookback_period).dropna()
-            if len(returns_6m) >= 1:
-                # Obtener los últimos retornos de 6 meses
-                latest_returns = returns_6m.iloc[-1]
-                
-                # Filtrar activos válidos
-                valid_assets = [a for a in assets if a in latest_returns.index and not pd.isna(latest_returns[a])]
-                
-                if len(valid_assets) >= num_assets:
-                    # Seleccionar los 5 activos con mejor retorno de 6 meses
-                    top_assets = sorted(valid_assets, key=lambda a: latest_returns[a], reverse=True)[:num_assets]
-                    
-                    # Calcular matriz de covarianza ponderada
-                    # Usar retornos diarios de los últimos 126 días para correlación
-                    recent_returns = df_subset[valid_assets].pct_change().iloc[-lookback_period:].dropna()
-                    if len(recent_returns) >= 2:
-                        # Calcular volatilidad de 20 días para cada activo
-                        vol_20d = recent_returns.iloc[-20:].std()
-                        if not vol_20d.isnull().any() and not (vol_20d == 0).any():
-                            # Calcular matriz de correlación de 126 días
-                            corr_matrix = recent_returns.corr()
-                            if not corr_matrix.isnull().any().any():
-                                # Crear matriz de covarianza ponderada
-                                cov_matrix = corr_matrix.mul(np.outer(vol_20d, vol_20d))
-                                
-                                # Filtrar la matriz de covarianza para los activos seleccionados
-                                selected_cov_matrix = cov_matrix.loc[top_assets, top_assets]
-                                
-                                # Optimización de mínima varianza
-                                try:
-                                    from scipy.optimize import minimize
-                                    
-                                    def objective(weights, cov_matrix):
-                                        return np.dot(weights.T, np.dot(cov_matrix, weights))
-                                    
-                                    def constraint_sum(weights):
-                                        return np.sum(weights) - 1
-                                    
-                                    n_assets = len(top_assets)
-                                    initial_weights = np.array([1/n_assets] * n_assets)
-                                    bounds = tuple((0, 1) for _ in range(n_assets))
-                                    constraints = [{'type': 'eq', 'fun': constraint_sum}]
-                                    
-                                    result = minimize(objective, initial_weights, args=(selected_cov_matrix.values,), 
-                                                    method='SLSQP', bounds=bounds, constraints=constraints)
-                                    
-                                    if result.success:
-                                        optimal_weights = result.x
-                                        w = dict(zip(top_assets, optimal_weights))
-                                    else:
-                                        # Si la optimización falla, asignar igualmente
-                                        w = {a: 1.0/len(top_assets) for a in top_assets}
-                                except ImportError:
-                                    # Si scipy no está disponible, asignar igualmente
-                                    w = {a: 1.0/len(top_assets) for a in top_assets}
-                                except Exception:
-                                    # Si hay otros errores en la optimización, asignar igualmente
-                                    w = {a: 1.0/len(top_assets) for a in top_assets}
-                            else:
-                                # Si hay problemas con la correlación, asignar igualmente
-                                w = {a: 1.0/len(top_assets) for a in top_assets}
-                        else:
-                            # Si hay problemas con la volatilidad, asignar igualmente
-                            w = {a: 1.0/len(top_assets) for a in top_assets}
-                    else:
-                        # Si no hay suficientes datos para covarianza, asignar igualmente
-                        w = {a: 1.0/len(top_assets) for a in top_assets}
-                else:
-                    # Si no hay suficientes activos válidos, asignar igualmente
-                    w = {a: 1.0/len(valid_assets) for a in valid_assets} if valid_assets else {}
-            else:
-                w = {}
-            
-            sig.append((df.index[-1], w))
-        except Exception as e:
-            sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
     
     sig = list({s[0]: s for s in sig}.values()) # Eliminar duplicados
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
@@ -1522,7 +1145,8 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}"
              })
-    if not formatted_data: # Corrección del error de sintaxis
+    # Corrección del error de sintaxis: se completó la condición if
+    if not formatted_data:
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
@@ -1549,14 +1173,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             elif s == "Sistema Descorrelación":
                 all_tickers_needed.update(strategy["main"])
                 all_tickers_needed.update(strategy["secondary"])
-            elif s == "Momentum Dinámico con Protección": # Manejo de la nueva estrategia
-                all_tickers_needed.update(strategy["risky"])
-                all_tickers_needed.update(strategy["safe"])
+            elif s == "HAA": # Manejo de la nueva estrategia
+                all_tickers_needed.update(strategy["offensive_universe"])
                 all_tickers_needed.update(strategy["canary"])
-            elif s == "Adaptive Asset Allocation": # Manejo de la nueva estrategia
-                all_tickers_needed.update(strategy["assets"])
-                # Asegurarse de que ^VIX también esté disponible si se usa
-                # En este caso, los activos son tickers normales, no ^VIX
+                all_tickers_needed.update(strategy["cash_proxy_candidates"])
             else:
                 for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective", "safe"]:
                     if key in strategy:
@@ -1652,26 +1272,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_current = weights_sistema_descorrelacion(df_full,
                                                                  ALL_STRATEGIES[s]["main"],
                                                                  ALL_STRATEGIES[s]["secondary"])
-                elif s == "Momentum Dinámico con Protección": # Integración de la nueva estrategia
-                    sig_last = weights_momentum_dinamico_proteccion(df_up_to_last_month_end,
-                                                                   ALL_STRATEGIES[s]["risky"],
-                                                                   ALL_STRATEGIES[s]["safe"],
-                                                                   ALL_STRATEGIES[s]["canary"])
-                    sig_current = weights_momentum_dinamico_proteccion(df_full,
-                                                                      ALL_STRATEGIES[s]["risky"],
-                                                                      ALL_STRATEGIES[s]["safe"],
-                                                                      ALL_STRATEGIES[s]["canary"])
-                elif s == "Adaptive Asset Allocation": # Integración de la nueva estrategia
-                    sig_last = weights_adaptive_asset_allocation(df_up_to_last_month_end,
-                                                               ALL_STRATEGIES[s]["assets"],
-                                                               ALL_STRATEGIES[s]["lookback_period"],
-                                                               ALL_STRATEGIES[s]["holding_period"],
-                                                               ALL_STRATEGIES[s]["num_assets"])
-                    sig_current = weights_adaptive_asset_allocation(df_full,
-                                                                  ALL_STRATEGIES[s]["assets"],
-                                                                  ALL_STRATEGIES[s]["lookback_period"],
-                                                                  ALL_STRATEGIES[s]["holding_period"],
-                                                                  ALL_STRATEGIES[s]["num_assets"])
+                elif s == "HAA": # Integración de la nueva estrategia
+                    sig_last = weights_haa(df_up_to_last_month_end,
+                                          ALL_STRATEGIES[s]["offensive_universe"],
+                                          ALL_STRATEGIES[s]["canary"],
+                                          ALL_STRATEGIES[s]["cash_proxy_candidates"])
+                    sig_current = weights_haa(df_full,
+                                             ALL_STRATEGIES[s]["offensive_universe"],
+                                             ALL_STRATEGIES[s]["canary"],
+                                             ALL_STRATEGIES[s]["cash_proxy_candidates"])
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]
                     # st.write(f"📝 Señal REAL para {s}: {sig_last[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
@@ -1699,26 +1308,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.stop()
         # --- cálculo de cartera combinada ---
         try:
-            # Mostrar log de señales para debugging
-            # st.subheader("📋 Log de Señales Mensuales (Debug)") # Ocultar log
-            # for s in active: # Ocultar log
-            #     st.write(f"**{s} - Señales Reales:**") # Ocultar log
-            #     if s in signals_log and signals_log[s]["real"]: # Ocultar log
-            #         signal_df = pd.DataFrame([ # Ocultar log
-            #             {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})} # Ocultar log
-            #             for sig in signals_log[s]["real"] # Ocultar log
-            #         ]) # Ocultar log
-            #         st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True) # Ocultar log
-            #     else: # Ocultar log
-            #         st.write("No hay señales disponibles") # Ocultar log
-            #     st.write(f"**{s} - Señal Hipotética Actual:**") # Ocultar log
-            #     if s in signals_log and signals_log[s]["hypothetical"]: # Ocultar log
-            #         hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {}) # Ocultar log
-            #         # Corrección: Convertir Timestamp a string si es necesario # Ocultar log
-            #         fecha_str = hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else str(hyp_signal[0]) # Ocultar log
-            #         st.write(f"Fecha: {fecha_str}") # Ocultar log
-            #         st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }") # Ocultar log
-            #     st.markdown("---") # Ocultar log
             # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
             if len(df_filtered) < 13:
                 st.error("❌ No hay suficientes datos en el rango filtrado.")
@@ -1757,17 +1346,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     strategy_signals[s] = weights_sistema_descorrelacion(df_filtered,
                                                                        ALL_STRATEGIES[s]["main"],
                                                                        ALL_STRATEGIES[s]["secondary"])
-                elif s == "Momentum Dinámico con Protección": # Integración de la nueva estrategia
-                    strategy_signals[s] = weights_momentum_dinamico_proteccion(df_filtered,
-                                                                              ALL_STRATEGIES[s]["risky"],
-                                                                              ALL_STRATEGIES[s]["safe"],
-                                                                              ALL_STRATEGIES[s]["canary"])
-                elif s == "Adaptive Asset Allocation": # Integración de la nueva estrategia
-                    strategy_signals[s] = weights_adaptive_asset_allocation(df_filtered,
-                                                                          ALL_STRATEGIES[s]["assets"],
-                                                                          ALL_STRATEGIES[s]["lookback_period"],
-                                                                          ALL_STRATEGIES[s]["holding_period"],
-                                                                          ALL_STRATEGIES[s]["num_assets"])
+                elif s == "HAA": # Integración de la nueva estrategia
+                    strategy_signals[s] = weights_haa(df_filtered,
+                                                   ALL_STRATEGIES[s]["offensive_universe"],
+                                                   ALL_STRATEGIES[s]["canary"],
+                                                   ALL_STRATEGIES[s]["cash_proxy_candidates"])
             # 2. Preparar estructura para la cartera combinada
             rebalance_dates = [sig[0] for sig in strategy_signals[active[0]]] if active and strategy_signals.get(active[0]) else []
             if not rebalance_dates:
@@ -1799,11 +1382,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                        break
                     for ticker, weight in signal_for_period.items():
                         combined_weights[ticker] = combined_weights.get(ticker, 0) + weight / len(active)
-                # CORRECCIÓN: Cambiar la forma de iterar sobre period_returns
-                # En lugar de iterrows(), usar directamente el índice y las columnas
-                for date in period_returns.index:
+                for idx, (date, row) in enumerate(period_returns.iterrows()):
                     portfolio_return = 0
-                    row = period_returns.loc[date]
                     for ticker, weight in combined_weights.items():
                         if ticker in row.index and not pd.isna(row[ticker]):
                             portfolio_return += weight * row[ticker]
@@ -1879,17 +1459,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      sig_list = weights_sistema_descorrelacion(df_filtered,
                                                              ALL_STRATEGIES[s]["main"],
                                                              ALL_STRATEGIES[s]["secondary"])
-                 elif s == "Momentum Dinámico con Protección": # Integración de la nueva estrategia
-                     sig_list = weights_momentum_dinamico_proteccion(df_filtered,
-                                                                    ALL_STRATEGIES[s]["risky"],
-                                                                    ALL_STRATEGIES[s]["safe"],
-                                                                    ALL_STRATEGIES[s]["canary"])
-                 elif s == "Adaptive Asset Allocation": # Integración de la nueva estrategia
-                     sig_list = weights_adaptive_asset_allocation(df_filtered,
-                                                                ALL_STRATEGIES[s]["assets"],
-                                                                ALL_STRATEGIES[s]["lookback_period"],
-                                                                ALL_STRATEGIES[s]["holding_period"],
-                                                                ALL_STRATEGIES[s]["num_assets"])
+                 elif s == "HAA": # Integración de la nueva estrategia
+                     sig_list = weights_haa(df_filtered,
+                                          ALL_STRATEGIES[s]["offensive_universe"],
+                                          ALL_STRATEGIES[s]["canary"],
+                                          ALL_STRATEGIES[s]["cash_proxy_candidates"])
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
                  signals_dict_ind = {sig[0]: sig[1] for sig in sig_list}
                  if not rebalance_dates_ind:
@@ -1906,11 +1480,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      end_hold_date_ind = min(end_hold_date_ind, df_filtered.index[-1] + pd.DateOffset(days=1))
                      period_returns_ind = df_returns[(df_returns.index >= start_hold_date_ind) & (df_returns.index < end_hold_date_ind)]
                      weights_ind = signals_dict_ind.get(start_hold_date_ind, {})
-                     # CORRECCIÓN: Cambiar la forma de iterar sobre period_returns_ind
-                     # En lugar de iterrows(), usar directamente el índice y las columnas
-                     for date in period_returns_ind.index:
+                     for idx, (date, row) in enumerate(period_returns_ind.iterrows()):
                          portfolio_return_ind = 0
-                         row = period_returns_ind.loc[date]
                          for ticker, weight in weights_ind.items():
                              if ticker in row.index and not pd.isna(row[ticker]):
                                  portfolio_return_ind += weight * row[ticker]
@@ -1931,6 +1502,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             # Determinar nombres de pestañas, incluyendo la nueva pestaña de logs
             tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active] + ["📝 Log de Señales"]
             tabs = st.tabs(tab_names)
+            
             # ---- TAB 0: COMBINADA ----
             with tabs[0]:
                 col1, col2 = st.columns(2)
@@ -2221,6 +1793,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             st.write("No hay datos disponibles para esta estrategia.")
                 except Exception as e:
                     st.error(f"❌ Error en pestaña {s}: {e}")
+            
             # ---- NUEVA PESTAÑA: LOG DE SEÑALES ----
             with tabs[-1]: # Acceder a la última pestaña creada
                 st.header("📝 Log de Señales Mensuales")
@@ -2243,6 +1816,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         st.write(f"Fecha: {fecha_str}")
                         st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
                     st.markdown("---")
+                    
         except Exception as e:
             st.error(f"❌ Error mostrando resultados combinados: {e}")
 else:
