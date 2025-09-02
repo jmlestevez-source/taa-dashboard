@@ -1114,8 +1114,8 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}"
              })
-        if not formatted_data:
-        return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
+                   if not formatted_data:
+                return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
 # ------------- MAIN -------------
