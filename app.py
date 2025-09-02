@@ -484,7 +484,7 @@ def haa_momentum_score(df, symbol):
         
         if p1 <= 0 or p3 <= 0 or p6 <= 0 or p12 <= 0:
             return float('-inf')
-            
+        
         roc_1 = (p0 / p1) - 1
         roc_3 = (p0 / p3) - 1
         roc_6 = (p0 / p6) - 1
@@ -1145,7 +1145,6 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}"
              })
-    # Corrección del error de sintaxis: se completó la condición if
     if not formatted_data:
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
@@ -1308,6 +1307,26 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.stop()
         # --- cálculo de cartera combinada ---
         try:
+            # Mostrar log de señales para debugging
+            st.subheader("📋 Log de Señales Mensuales (Debug)")
+            for s in active:
+                st.write(f"**{s} - Señales Reales:**")
+                if s in signals_log and signals_log[s]["real"]:
+                    signal_df = pd.DataFrame([
+                        {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}
+                        for sig in signals_log[s]["real"]
+                    ])
+                    st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
+                else:
+                    st.write("No hay señales disponibles")
+                st.write(f"**{s} - Señal Hipotética Actual:**")
+                if s in signals_log and signals_log[s]["hypothetical"]:
+                    hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
+                    # Corrección: Convertir Timestamp a string si es necesario
+                    fecha_str = hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else str(hyp_signal[0])
+                    st.write(f"Fecha: {fecha_str}")
+                    st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
+                st.markdown("---")
             # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
             if len(df_filtered) < 13:
                 st.error("❌ No hay suficientes datos en el rango filtrado.")
@@ -1348,9 +1367,9 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                                                        ALL_STRATEGIES[s]["secondary"])
                 elif s == "HAA": # Integración de la nueva estrategia
                     strategy_signals[s] = weights_haa(df_filtered,
-                                                   ALL_STRATEGIES[s]["offensive_universe"],
-                                                   ALL_STRATEGIES[s]["canary"],
-                                                   ALL_STRATEGIES[s]["cash_proxy_candidates"])
+                                                     ALL_STRATEGIES[s]["offensive_universe"],
+                                                     ALL_STRATEGIES[s]["canary"],
+                                                     ALL_STRATEGIES[s]["cash_proxy_candidates"])
             # 2. Preparar estructura para la cartera combinada
             rebalance_dates = [sig[0] for sig in strategy_signals[active[0]]] if active and strategy_signals.get(active[0]) else []
             if not rebalance_dates:
@@ -1502,7 +1521,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             # Determinar nombres de pestañas, incluyendo la nueva pestaña de logs
             tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active] + ["📝 Log de Señales"]
             tabs = st.tabs(tab_names)
-            
             # ---- TAB 0: COMBINADA ----
             with tabs[0]:
                 col1, col2 = st.columns(2)
@@ -1573,15 +1591,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 # NUEVA: Tabla de retornos mensuales
                 st.subheader("📅 Retornos Mensuales por Año")
                 try:
-                    # Obtener retornos mensuales para la cartera combinada
-                    # CORRECCIÓN: Usar resample('ME').last() para obtener el último valor de cada mes
-                    # y luego calcular pct_change() para obtener el retorno mensual real
-                    returns_monthly = comb_series.resample('ME').last().pct_change().dropna()
-                    if not returns_monthly.empty:
+                    # CORRECCIÓN: Calcular retornos mensuales reales usando resample('ME').last()
+                    # Esto asegura que se tome el último valor de cada mes para calcular el retorno mensual
+                    monthly_values = comb_series.resample('ME').last()
+                    monthly_returns = monthly_values.pct_change().dropna()
+                    if not monthly_returns.empty:
                         # Asegurarse de que el índice sea de tipo datetime
-                        returns_monthly.index = pd.to_datetime(returns_monthly.index)
+                        monthly_returns.index = pd.to_datetime(monthly_returns.index)
                         # Crear un DataFrame con los retornos y una columna auxiliar para el año
-                        returns_df = pd.DataFrame({'Return': returns_monthly, 'Year': returns_monthly.index.year})
+                        returns_df = pd.DataFrame({'Return': monthly_returns, 'Year': monthly_returns.index.year})
                         # Agrupar por año
                         yearly_groups = returns_df.groupby('Year')
                         # Formatear para tabla
@@ -1704,15 +1722,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             # NUEVA: Tabla de retornos mensuales
                             st.subheader("📅 Retornos Mensuales por Año")
                             try:
-                                # Obtener retornos mensuales para esta estrategia
-                                # CORRECCIÓN: Usar resample('ME').last() para obtener el último valor de cada mes
-                                # y luego calcular pct_change() para obtener el retorno mensual real
-                                returns_monthly = ser.resample('ME').last().pct_change().dropna()
-                                if not returns_monthly.empty:
+                                # CORRECCIÓN: Calcular retornos mensuales reales usando resample('ME').last()
+                                # Esto asegura que se tome el último valor de cada mes para calcular el retorno mensual
+                                monthly_values = ser.resample('ME').last()
+                                monthly_returns = monthly_values.pct_change().dropna()
+                                if not monthly_returns.empty:
                                     # Asegurarse de que el índice sea de tipo datetime
-                                    returns_monthly.index = pd.to_datetime(returns_monthly.index)
+                                    monthly_returns.index = pd.to_datetime(monthly_returns.index)
                                     # Crear un DataFrame con los retornos y una columna auxiliar para el año
-                                    returns_df = pd.DataFrame({'Return': returns_monthly, 'Year': returns_monthly.index.year})
+                                    returns_df = pd.DataFrame({'Return': monthly_returns, 'Year': monthly_returns.index.year})
                                     # Agrupar por año
                                     yearly_groups = returns_df.groupby('Year')
                                     # Formatear para tabla
@@ -1793,7 +1811,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             st.write("No hay datos disponibles para esta estrategia.")
                 except Exception as e:
                     st.error(f"❌ Error en pestaña {s}: {e}")
-            
             # ---- NUEVA PESTAÑA: LOG DE SEÑALES ----
             with tabs[-1]: # Acceder a la última pestaña creada
                 st.header("📝 Log de Señales Mensuales")
@@ -1816,7 +1833,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         st.write(f"Fecha: {fecha_str}")
                         st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
                     st.markdown("---")
-                    
         except Exception as e:
             st.error(f"❌ Error mostrando resultados combinados: {e}")
 else:
