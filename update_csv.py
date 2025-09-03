@@ -18,9 +18,10 @@ for ticker in TICKERS:
 
     # Si ya existe, cargamos histórico previo
     if os.path.exists(file_path):
-        df_existing = pd.read_csv(file_path, index_col=0, parse_dates=True)
+        df_existing = pd.read_csv(file_path, index_col=0)
+        df_existing.index = pd.to_datetime(df_existing.index)  # 👈 convertir a datetime
         last_date = df_existing.index[-1].date()
-        start_date = last_date - timedelta(days=1)  # retrocedemos un día para no perder sesiones
+        start_date = last_date - timedelta(days=1)  # retrocedemos un día
     else:
         df_existing = pd.DataFrame()
         start_date = "1980-01-01"
