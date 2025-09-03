@@ -70,7 +70,6 @@ HAA = {
     "canary": ['TIP'],
     "cash_proxy_candidates": ['IEF', 'BIL'] # Para representar efectivo y alternativas defensivas
 }
-
 ALL_STRATEGIES = {
     "DAA KELLER": DAA_KELLER,
     "Dual Momentum ROC4": DUAL_ROC4,
@@ -82,7 +81,6 @@ ALL_STRATEGIES = {
     "Sistema Descorrelación": SISTEMA_DESCORRELACION,
     "HAA": HAA # Añadida la nueva estrategia
 }
-
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
 # FMP API Keys
@@ -213,6 +211,10 @@ def get_fmp_data(ticker, days=365*10):
                 st.warning(f"⚠️ Datos vacíos de FMP para {ticker}")
                 _DOWNLOAD_ERRORS_OCCURRED = True
                 return pd.DataFrame()
+        elif response.status_code == 403:
+            st.warning(f"⚠️ Error HTTP 403 (acceso denegado) obteniendo datos de FMP para {ticker}")
+            # No incrementar FMP_CALLS para evitar contar este error como uso válido
+            return pd.DataFrame()
         else:
             st.warning(f"⚠️ Error HTTP {response.status_code} obteniendo datos de FMP para {ticker}")
             _DOWNLOAD_ERRORS_OCCURRED = True
@@ -481,15 +483,12 @@ def haa_momentum_score(df, symbol):
         p3 = df[symbol].iloc[-4]   # Hace 3 meses
         p6 = df[symbol].iloc[-7]   # Hace 6 meses
         p12 = df[symbol].iloc[-13] # Hace 12 meses
-        
         if p1 <= 0 or p3 <= 0 or p6 <= 0 or p12 <= 0:
             return float('-inf')
-            
         roc_1 = (p0 / p1) - 1
         roc_3 = (p0 / p3) - 1
         roc_6 = (p0 / p6) - 1
         roc_12 = (p0 / p12) - 1
-        
         # Media no ponderada
         score = (roc_1 + roc_3 + roc_6 + roc_12) / 4
         return score
@@ -1033,7 +1032,6 @@ def weights_haa(df, offensive_universe, canary, cash_proxy_candidates):
                     tip_momentum = 0
             else:
                 tip_momentum = 0 # Fallback
-            
             w = {}
             if tip_momentum > 0: # Etapa 2a: Modo Ofensivo
                 # Calcular momentum para el universo ofensivo
@@ -1051,7 +1049,6 @@ def weights_haa(df, offensive_universe, canary, cash_proxy_candidates):
                         best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
                     else:
                         best_cash_proxy = 'BIL' # Default
-                    
                     for asset, momentum_score in top_4_offensive:
                         if momentum_score > 0:
                             w[asset] = w.get(asset, 0) + 0.25
@@ -1060,7 +1057,6 @@ def weights_haa(df, offensive_universe, canary, cash_proxy_candidates):
                             w[best_cash_proxy] = w.get(best_cash_proxy, 0) + 0.25
                 # Si hay menos de 4 activos válidos, se podría manejar de otra forma,
                 # pero por simplicidad dejamos la cartera vacía o con efectivo.
-                            
             else: # Etapa 2b: Modo Defensivo
                 # Asignar 100% al mejor activo entre los candidatos a efectivo
                 cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
@@ -1071,11 +1067,9 @@ def weights_haa(df, offensive_universe, canary, cash_proxy_candidates):
                 else:
                     # Si no hay proxies de efectivo válidos, asignar a BIL por defecto
                     w['BIL'] = 1.0
-                    
             sig.append((df.index[i], w))
         except Exception as e:
             sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
-    
     # Señal para el último periodo
     if len(df) >= 13:
          try:
@@ -1090,7 +1084,6 @@ def weights_haa(df, offensive_universe, canary, cash_proxy_candidates):
                      tip_momentum = 0
              else:
                  tip_momentum = 0 # Fallback
-             
              w = {}
              if tip_momentum > 0: # Etapa 2a: Modo Ofensivo
                  # Calcular momentum para el universo ofensivo
@@ -1108,14 +1101,12 @@ def weights_haa(df, offensive_universe, canary, cash_proxy_candidates):
                          best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
                      else:
                          best_cash_proxy = 'BIL' # Default
-                     
                      for asset, momentum_score in top_4_offensive:
                          if momentum_score > 0:
                              w[asset] = w.get(asset, 0) + 0.25
                          else:
                              # Si el momentum es negativo, asignar a efectivo
                              w[best_cash_proxy] = w.get(best_cash_proxy, 0) + 0.25
-                             
              else: # Etapa 2b: Modo Defensivo
                  # Asignar 100% al mejor activo entre los candidatos a efectivo
                  cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
@@ -1126,11 +1117,9 @@ def weights_haa(df, offensive_universe, canary, cash_proxy_candidates):
                  else:
                      # Si no hay proxies de efectivo válidos, asignar a BIL por defecto
                      w['BIL'] = 1.0
-                     
              sig.append((df.index[-1], w))
          except Exception as e:
              sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
-    
     sig = list({s[0]: s for s in sig}.values()) # Eliminar duplicados
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
@@ -1305,26 +1294,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.stop()
         # --- cálculo de cartera combinada ---
         try:
-            # Mostrar log de señales para debugging
-            st.subheader("📋 Log de Señales Mensuales (Debug)")
-            for s in active:
-                st.write(f"**{s} - Señales Reales:**")
-                if s in signals_log and signals_log[s]["real"]:
-                    signal_df = pd.DataFrame([
-                        {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}
-                        for sig in signals_log[s]["real"]
-                    ])
-                    st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
-                else:
-                    st.write("No hay señales disponibles")
-                st.write(f"**{s} - Señal Hipotética Actual:**")
-                if s in signals_log and signals_log[s]["hypothetical"]:
-                    hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
-                    # Corrección: Convertir Timestamp a string si es necesario
-                    fecha_str = hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else str(hyp_signal[0])
-                    st.write(f"Fecha: {fecha_str}")
-                    st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
-                st.markdown("---")
             # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
             if len(df_filtered) < 13:
                 st.error("❌ No hay suficientes datos en el rango filtrado.")
@@ -1518,6 +1487,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         try:
             tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
             tabs = st.tabs(tab_names)
+            
             # ---- TAB 0: COMBINADA ----
             with tabs[0]:
                 col1, col2 = st.columns(2)
@@ -1585,6 +1555,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     st.dataframe(corr_matrix.round(3), use_container_width=True)
                 except Exception as e:
                     st.warning(f"No se pudieron calcular las correlaciones: {e}")
+                
                 # NUEVA: Tabla de retornos mensuales
                 st.subheader("📅 Retornos Mensuales por Año")
                 try:
@@ -1663,6 +1634,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     # Opcional: Mostrar el traceback completo para depuración
                     # import traceback
                     # st.text(traceback.format_exc())
+                    
             # ---- TABS INDIVIDUALES ----
             for idx, s in enumerate(active, start=1):
                 try:
@@ -1706,6 +1678,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                                       fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
                             fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
                             st.plotly_chart(fig_dd, use_container_width=True)
+                            
                             # NUEVA: Tabla de retornos mensuales
                             st.subheader("📅 Retornos Mensuales por Año")
                             try:
@@ -1792,3 +1765,26 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.error(f"❌ Error mostrando resultados combinados: {e}")
 else:
     st.info("👈 Configura y ejecuta")
+
+# Nueva pestaña para mostrar el log de señales
+log_tab = st.tabs(["📊 Cartera Combinada", "📋 Log de Señales", *[f"📈 {s}" for s in active]])[1]
+with log_tab:
+    st.subheader("📋 Log de Señales Mensuales (Debug)")
+    for s in active:
+        st.write(f"**{s} - Señales Reales:**")
+        if s in signals_log and signals_log[s]["real"]:
+            signal_df = pd.DataFrame([
+                {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}
+                for sig in signals_log[s]["real"]
+            ])
+            st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
+        else:
+            st.write("No hay señales disponibles")
+        st.write(f"**{s} - Señal Hipotética Actual:**")
+        if s in signals_log and signals_log[s]["hypothetical"]:
+            hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
+            # Corrección: Convertir Timestamp a string si es necesario
+            fecha_str = hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else str(hyp_signal[0])
+            st.write(f"Fecha: {fecha_str}")
+            st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
+        st.markdown("---")
