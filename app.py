@@ -10,6 +10,8 @@ from collections import defaultdict
 import os
 import pickle
 import hashlib
+import base64
+import json
 
 # Nueva importación para yfinance
 import yfinance as yf
@@ -22,6 +24,9 @@ st.title("🎯 Multi-Strategy Tactical Asset Allocation")
 initial_capital = st.sidebar.number_input("💰 Capital Inicial ($)", 1000, 10_000_000, 100000, 1000)
 start_date = st.sidebar.date_input("Fecha de inicio", datetime(2015, 1, 1))
 end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today())
+
+# Token de GitHub (debe ser configurado en las variables de entorno)
+GITHUB_TOKEN = st.sidebar.text_input("🔐 Token de GitHub", type="password")
 
 # Actualización: VGK -> IEV en todas las estrategias
 DAA_KELLER = {
@@ -139,39 +144,6 @@ def get_available_fmp_key():
 # ------------- DESCARGA (Solo CSV desde GitHub + FMP + yfinance para ^VIX) -------------
 # Variable global para rastrear errores durante la descarga
 _DOWNLOAD_ERRORS_OCCURRED = False
-
-# --- NUEVA FUNCIÓN PARA DESCARGAR DATOS DE ^VIX CON YFINANCE ---
-def get_yfinance_data_single(ticker, start, end):
-    """Descarga datos usando yfinance para un solo ticker"""
-    global _DOWNLOAD_ERRORS_OCCURRED
-    try:
-        # st.write(f"🔄 Descargando {ticker} desde yfinance...") # Ocultar log
-        # Asegurarse de que las fechas sean datetime.date
-        if isinstance(start, pd.Timestamp):
-            start = start.date()
-        if isinstance(end, pd.Timestamp):
-            end = end.date()
-        
-        # Descargar datos
-        df = yf.download(ticker, start=start, end=end, progress=False)
-        
-        if df is not None and not df.empty:
-            # Seleccionar la columna 'Close' y renombrarla
-            close_series = df['Close'].rename(ticker)
-            # Convertir a DataFrame
-            df_final = close_series.to_frame()
-            # Asegurar que el índice sea datetime
-            df_final.index = pd.to_datetime(df_final.index)
-            # st.write(f"✅ {ticker} descargado desde yfinance - {len(df_final)} registros") # Ocultar log
-            return df_final
-        else:
-            st.warning(f"⚠️ No se obtuvieron datos para {ticker} desde yfinance")
-            _DOWNLOAD_ERRORS_OCCURRED = True
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"❌ Error descargando {ticker} desde yfinance: {e}")
-        _DOWNLOAD_ERRORS_OCCURRED = True
-        return pd.DataFrame()
 
 def should_use_fmp(csv_df, days_threshold=7):
     """Verifica si es necesario usar FMP basado en la frescura de los datos CSV"""
@@ -1220,9 +1192,152 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}"
              })
-    if not formatted_data:
+    if not formatted_
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
+
+# Función para actualizar CSVs en GitHub
+def update_csvs_github(token, repo_owner, repo_name, data_folder="data"):
+    """Actualiza los archivos CSV en GitHub con datos más recientes"""
+    if not token:
+        st.error("⚠️ Token de GitHub no proporcionado")
+        return False
+        
+    try:
+        # Obtener lista de archivos CSV en la carpeta data
+        files = os.listdir(data_folder)
+        csv_files = [f for f in files if f.endswith('.csv')]
+        
+        if not csv_files:
+            st.warning("⚠️ No se encontraron archivos CSV para actualizar")
+            return False
+            
+        success_count = 0
+        for csv_file in csv_files:
+            ticker = csv_file.replace('.csv', '')
+            try:
+                # Descargar datos nuevos de yfinance
+                data = yf.download(ticker, period="max", progress=False)
+                
+                if data.empty:
+                    st.warning(f"⚠️ No se encontraron datos para {ticker}")
+                    continue
+                    
+                # Formatear datos para CSV
+                data = data.reset_index()
+                data = data.rename(columns={
+                    'Date': 'date', 
+                    'Open': 'open', 
+                    'High': 'high', 
+                    'Low': 'low', 
+                    'Close': 'close', 
+                    'Volume': 'volume'
+                })
+                
+                # Crear contenido CSV
+                csv_content = "Date,Open,High,Low,Close,Volume\n"
+                for idx, row in data.iterrows():
+                    csv_content += f"{row['date'].strftime('%Y-%m-%d')},{row['open']:.2f},{row['high']:.2f},{row['low']:.2f},{row['close']:.2f},{row['volume']}\n"
+                
+                # Obtener SHA actual del archivo (si existe)
+                file_path = f"{data_folder}/{csv_file}"
+                sha = None
+                
+                # Verificar si el archivo existe en GitHub
+                try:
+                    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+                    headers = {
+                        "Authorization": f"token {token}",
+                        "Accept": "application/vnd.github.v3+json"
+                    }
+                    response = requests.get(url, headers=headers)
+                    if response.status_code == 200:
+                        sha = response.json()['sha']
+                except:
+                    pass  # Si no se puede obtener el SHA, se crea como nuevo
+                
+                # Subir archivo actualizado
+                url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
+                payload = {
+                    "message": f"Update {ticker} data - {datetime.now().strftime('%Y-%m-%d')}",
+                    "content": base64.b64encode(csv_content.encode()).decode(),
+                    "sha": sha
+                }
+                
+                headers = {
+                    "Authorization": f"token {token}",
+                    "Accept": "application/vnd.github.v3+json"
+                }
+                
+                response = requests.put(url, headers=headers, data=json.dumps(payload))
+                
+                if response.status_code in [200, 201]:
+                    st.success(f"✅ Archivo {csv_file} actualizado en GitHub")
+                    success_count += 1
+                else:
+                    st.error(f"❌ Error al actualizar {csv_file}: {response.status_code}")
+                    st.error(response.text)
+                    
+            except Exception as e:
+                st.error(f"❌ Error actualizando {csv_file}: {e}")
+                
+        st.success(f"✅ Actualización completada: {success_count}/{len(csv_files)} archivos actualizados")
+        return success_count > 0
+        
+    except Exception as e:
+        st.error(f"❌ Error en actualización masiva: {e}")
+        return False
+
+# Función para actualizar CSVs localmente
+def update_csvs_local(data_folder="data"):
+    """Actualiza los archivos CSV localmente con datos más recientes"""
+    try:
+        # Obtener lista de archivos CSV en la carpeta data
+        files = os.listdir(data_folder)
+        csv_files = [f for f in files if f.endswith('.csv')]
+        
+        if not csv_files:
+            st.warning("⚠️ No se encontraron archivos CSV para actualizar")
+            return False
+            
+        success_count = 0
+        for csv_file in csv_files:
+            ticker = csv_file.replace('.csv', '')
+            try:
+                # Descargar datos nuevos de yfinance
+                data = yf.download(ticker, period="max", progress=False)
+                
+                if data.empty:
+                    st.warning(f"⚠️ No se encontraron datos para {ticker}")
+                    continue
+                    
+                # Formatear datos para CSV
+                data = data.reset_index()
+                data = data.rename(columns={
+                    'Date': 'date', 
+                    'Open': 'open', 
+                    'High': 'high', 
+                    'Low': 'low', 
+                    'Close': 'close', 
+                    'Volume': 'volume'
+                })
+                
+                # Guardar archivo CSV
+                file_path = f"{data_folder}/{csv_file}"
+                data.to_csv(file_path, index=False)
+                
+                st.success(f"✅ Archivo {csv_file} actualizado localmente")
+                success_count += 1
+                
+            except Exception as e:
+                st.error(f"❌ Error actualizando {csv_file}: {e}")
+                
+        st.success(f"✅ Actualización local completada: {success_count}/{len(csv_files)} archivos actualizados")
+        return success_count > 0
+        
+    except Exception as e:
+        st.error(f"❌ Error en actualización local: {e}")
+        return False
 
 # ------------- MAIN -------------
 if st.sidebar.button("🚀 Ejecutar", type="primary"):
@@ -1382,26 +1497,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.stop()
         # --- cálculo de cartera combinada ---
         try:
-            # Mostrar log de señales para debugging
-            st.subheader("📋 Log de Señales Mensuales (Debug)")
-            for s in active:
-                st.write(f"**{s} - Señales Reales:**")
-                if s in signals_log and signals_log[s]["real"]:
-                    signal_df = pd.DataFrame([
-                        {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}
-                        for sig in signals_log[s]["real"]
-                    ])
-                    st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
-                else:
-                    st.write("No hay señales disponibles")
-                st.write(f"**{s} - Señal Hipotética Actual:**")
-                if s in signals_log and signals_log[s]["hypothetical"]:
-                    hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
-                    # Corrección: Convertir Timestamp a string si es necesario
-                    fecha_str = hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else str(hyp_signal[0])
-                    st.write(f"Fecha: {fecha_str}")
-                    st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
-                st.markdown("---")
             # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
             if len(df_filtered) < 13:
                 st.error("❌ No hay suficientes datos en el rango filtrado.")
@@ -1916,3 +2011,26 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.error(f"❌ Error mostrando resultados combinados: {e}")
 else:
     st.info("👈 Configura y ejecuta")
+
+# Botón para actualizar CSVs en GitHub
+st.sidebar.markdown("---")
+st.sidebar.header("🔄 Actualización de Datos")
+
+if st.sidebar.button("🔄 Actualizar CSVs en GitHub"):
+    if GITHUB_TOKEN:
+        with st.spinner("Actualizando archivos CSV en GitHub..."):
+            success = update_csvs_github(GITHUB_TOKEN, "jmlestevez-source", "taa-dashboard")
+            if success:
+                st.success("✅ Actualización en GitHub completada exitosamente")
+            else:
+                st.error("❌ Error en la actualización en GitHub")
+    else:
+        st.warning("⚠️ Por favor ingresa tu token de GitHub")
+
+if st.sidebar.button("🔄 Actualizar CSVs Localmente"):
+    with st.spinner("Actualizando archivos CSV localmente..."):
+        success = update_csvs_local()
+        if success:
+            st.success("✅ Actualización local completada exitosamente")
+        else:
+            st.error("❌ Error en la actualización local")
