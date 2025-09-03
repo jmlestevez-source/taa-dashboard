@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write   # 👈 da permiso al bot para hacer commit & push
+  contents: write   # necesario para poder hacer commit & push
 
 jobs:
   update-data:
