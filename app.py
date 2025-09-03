@@ -1193,98 +1193,102 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         if df is None or df.empty:
             st.error("❌ No hay datos suficientes para el análisis.")
             st.stop()
-        # --- Calcular señales antes de filtrar ---
-        last_data_date = df.index.max()
-        # Obtener el último día del mes ANTERIOR al último dato disponible
-        last_month_end_for_real_signal = (last_data_date.replace(day=1) - timedelta(days=1)).replace(day=1) + pd.offsets.MonthEnd(0)
-        df_up_to_last_month_end = df[df.index <= last_month_end_for_real_signal]
-        df_full = df
-        signals_dict_last = {}
-        signals_dict_current = {}
-        signals_log = {}
-        for s in active:
-            try:
-                if s == "DAA KELLER":
-                    sig_last = weights_daa(df_up_to_last_month_end, **ALL_STRATEGIES[s])
-                    sig_current = weights_daa(df_full, **ALL_STRATEGIES[s])
-                elif s == "Dual Momentum ROC4":
-                    sig_last = weights_roc4(df_up_to_last_month_end,
-                                          ALL_STRATEGIES[s]["universe"],
-                                          ALL_STRATEGIES[s]["fill"])
-                    sig_current = weights_roc4(df_full,
-                                             ALL_STRATEGIES[s]["universe"],
-                                             ALL_STRATEGIES[s]["fill"])
-                elif s == "Accelerated Dual Momentum":
-                    sig_last = weights_accel_dual_mom(df_up_to_last_month_end,
-                                                    ALL_STRATEGIES[s]["equity"],
-                                                    ALL_STRATEGIES[s]["protective"])
-                    sig_current = weights_accel_dual_mom(df_full,
-                                                       ALL_STRATEGIES[s]["equity"],
-                                                       ALL_STRATEGIES[s]["protective"])
-                elif s == "VAA-12":
-                    sig_last = weights_vaa_12(df_up_to_last_month_end,
-                                            ALL_STRATEGIES[s]["risky"],
-                                            ALL_STRATEGIES[s]["safe"])
-                    sig_current = weights_vaa_12(df_full,
-                                               ALL_STRATEGIES[s]["risky"],
-                                               ALL_STRATEGIES[s]["safe"])
-                elif s == "Composite Dual Momentum":
-                    sig_last = weights_composite_dual_mom(df_up_to_last_month_end,
-                                                        ALL_STRATEGIES[s]["slices"],
-                                                        ALL_STRATEGIES[s]["benchmark"])
-                    sig_current = weights_composite_dual_mom(df_full,
-                                                           ALL_STRATEGIES[s]["slices"],
-                                                           ALL_STRATEGIES[s]["benchmark"])
-                elif s == "Quint Switching Filtered":
-                    sig_last = weights_quint_switching_filtered(df_up_to_last_month_end,
-                                                               ALL_STRATEGIES[s]["risky"],
-                                                               ALL_STRATEGIES[s]["defensive"])
-                    sig_current = weights_quint_switching_filtered(df_full,
-                                                                 ALL_STRATEGIES[s]["risky"],
-                                                                 ALL_STRATEGIES[s]["defensive"])
-                elif s == "BAA Aggressive":
-                    sig_last = weights_baa_aggressive(df_up_to_last_month_end,
-                                                     ALL_STRATEGIES[s]["offensive"],
-                                                     ALL_STRATEGIES[s]["defensive"],
-                                                     ALL_STRATEGIES[s]["canary"])
-                    sig_current = weights_baa_aggressive(df_full,
-                                                       ALL_STRATEGIES[s]["offensive"],
-                                                       ALL_STRATEGIES[s]["defensive"],
-                                                       ALL_STRATEGIES[s]["canary"])
-                elif s == "Sistema Descorrelación":
-                    sig_last = weights_sistema_descorrelacion(df_up_to_last_month_end,
-                                                             ALL_STRATEGIES[s]["main"],
-                                                             ALL_STRATEGIES[s]["secondary"])
-                    sig_current = weights_sistema_descorrelacion(df_full,
-                                                                 ALL_STRATEGIES[s]["main"],
-                                                                 ALL_STRATEGIES[s]["secondary"])
-                elif s == "HAA": # Integración de la nueva estrategia
-                    sig_last = weights_haa(df_up_to_last_month_end,
-                                          ALL_STRATEGIES[s]["offensive_universe"],
-                                          ALL_STRATEGIES[s]["canary"],
-                                          ALL_STRATEGIES[s]["cash_proxy_candidates"])
-                    sig_current = weights_haa(df_full,
-                                           ALL_STRATEGIES[s]["offensive_universe"],
-                                           ALL_STRATEGIES[s]["canary"],
-                                           ALL_STRATEGIES[s]["cash_proxy_candidates"])
-                if sig_last and len(sig_last) > 0:
-                    signals_dict_last[s] = sig_last[-1][1]
-                    # st.write(f"📝 Señal REAL para {s}: {sig_last[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
-                else:
-                    signals_dict_last[s] = {}
-                if sig_current and len(sig_current) > 0:
-                    signals_dict_current[s] = sig_current[-1][1]
-                    # st.write(f"📝 Señal HIPOTÉTICA para {s}: {sig_current[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
-                else:
-                    signals_dict_current[s] = {}
-                signals_log[s] = {
-                    "real": sig_last,
-                    "hypothetical": sig_current
-                }
-            except Exception as e:
-                st.error(f"Error calculando señales para {s}: {e}")
-                signals_dict_last[s] = {}
-                signals_dict_current[s] = {}
+        # ... [previous code unchanged] ...
+
+# --- Calcular señales antes de filtrar ---
+last_data_date = df.index.max()
+# Obtener el último día del mes ANTERIOR al último dato disponible
+last_month_end_for_real_signal = (last_data_date.replace(day=1) - timedelta(days=1)).replace(day=1) + pd.offsets.MonthEnd(0)
+df_up_to_last_month_end = df[df.index <= last_month_end_for_real_signal]
+df_full = df
+signals_dict_last = {}
+signals_dict_current = {}
+signals_log = {}
+
+for s in active:
+    try:
+        if s == "DAA KELLER":
+            sig_last = weights_daa(df_up_to_last_month_end, **ALL_STRATEGIES[s])
+            sig_current = weights_daa(df_full, **ALL_STRATEGIES[s])
+        elif s == "Dual Momentum ROC4":
+            sig_last = weights_roc4(df_up_to_last_month_end,
+                                  ALL_STRATEGIES[s]["universe"],
+                                  ALL_STRATEGIES[s]["fill"])
+            sig_current = weights_roc4(df_full,
+                                     ALL_STRATEGIES[s]["universe"],
+                                     ALL_STRATEGIES[s]["fill"])
+        elif s == "Accelerated Dual Momentum":
+            sig_last = weights_accel_dual_mom(df_up_to_last_month_end,
+                                            ALL_STRATEGIES[s]["equity"],
+                                            ALL_STRATEGIES[s]["protective"])
+            sig_current = weights_accel_dual_mom(df_full,
+                                               ALL_STRATEGIES[s]["equity"],
+                                               ALL_STRATEGIES[s]["protective"])
+        elif s == "VAA-12":
+            sig_last = weights_vaa_12(df_up_to_last_month_end,
+                                    ALL_STRATEGIES[s]["risky"],
+                                    ALL_STRATEGIES[s]["safe"])
+            sig_current = weights_vaa_12(df_full,
+                                       ALL_STRATEGIES[s]["risky"],
+                                       ALL_STRATEGIES[s]["safe"])
+        elif s == "Composite Dual Momentum":
+            sig_last = weights_composite_dual_mom(df_up_to_last_month_end,
+                                                ALL_STRATEGIES[s]["slices"],
+                                                ALL_STRATEGIES[s]["benchmark"])
+            sig_current = weights_composite_dual_mom(df_full,
+                                                   ALL_STRATEGIES[s]["slices"],
+                                                   ALL_STRATEGIES[s]["benchmark"])
+        elif s == "Quint Switching Filtered":
+            sig_last = weights_quint_switching_filtered(df_up_to_last_month_end,
+                                                       ALL_STRATEGIES[s]["risky"],
+                                                       ALL_STRATEGIES[s]["defensive"])
+            sig_current = weights_quint_switching_filtered(df_full,
+                                                         ALL_STRATEGIES[s]["risky"],
+                                                         ALL_STRATEGIES[s]["defensive"])
+        elif s == "BAA Aggressive":
+            sig_last = weights_baa_aggressive(df_up_to_last_month_end,
+                                             ALL_STRATEGIES[s]["offensive"],
+                                             ALL_STRATEGIES[s]["defensive"],
+                                             ALL_STRATEGIES[s]["canary"])
+            sig_current = weights_baa_aggressive(df_full,
+                                               ALL_STRATEGIES[s]["offensive"],
+                                               ALL_STRATEGIES[s]["defensive"],
+                                               ALL_STRATEGIES[s]["canary"])
+        elif s == "Sistema Descorrelación":
+            sig_last = weights_sistema_descorrelacion(df_up_to_last_month_end,
+                                                     ALL_STRATEGIES[s]["main"],
+                                                     ALL_STRATEGIES[s]["secondary"])
+            sig_current = weights_sistema_descorrelacion(df_full,
+                                                       ALL_STRATEGIES[s]["main"],
+                                                       ALL_STRATEGIES[s]["secondary"])
+        elif s == "HAA": # Integración de la nueva estrategia
+            sig_last = weights_haa(df_up_to_last_month_end,
+                                  ALL_STRATEGIES[s]["offensive_universe"],
+                                  ALL_STRATEGIES[s]["canary"],
+                                  ALL_STRATEGIES[s]["cash_proxy_candidates"])
+            sig_current = weights_haa(df_full,
+                                   ALL_STRATEGIES[s]["offensive_universe"],
+                                   ALL_STRATEGIES[s]["canary"],
+                                   ALL_STRATEGIES[s]["cash_proxy_candidates"])
+        if sig_last and len(sig_last) > 0:
+            signals_dict_last[s] = sig_last[-1][1]
+            # st.write(f"📝 Señal REAL para {s}: {sig_last[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
+        else:
+            signals_dict_last[s] = {}
+        if sig_current and len(sig_current) > 0:
+            signals_dict_current[s] = sig_current[-1][1]
+            # st.write(f"📝 Señal HIPOTÉTICA para {s}: {sig_current[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
+        else:
+            signals_dict_current[s] = {}
+        signals_log[s] = {
+            "real": sig_last,
+            "hypothetical": sig_current
+        }
+    except Exception as e:
+        st.error(f"Error calculando señales para {s}: {e}")
+        signals_dict_last[s] = {}
+        signals_dict_current[s] = {}
+
         # Filtrar al rango de fechas del usuario
         start_date_ts = pd.Timestamp(start_date)
         end_date_ts = pd.Timestamp(end_date)
