@@ -2,8 +2,11 @@ name: Update CSVs daily
 
 on:
   schedule:
-    - cron: "0 9 * * *"   # cada día a las 09:00 UTC
-  workflow_dispatch:      # también se puede lanzar manualmente
+    - cron: "0 6 * * *"   # cada día a las 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write   # 👈 da permiso al bot para hacer commit & push
 
 jobs:
   update-data:
