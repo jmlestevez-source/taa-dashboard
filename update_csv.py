@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 
 # Lista de tickers que quieres descargar
-TICKERS = ["AAPL", "MSFT", "SPY"]
+TICKERS = ['SPY', 'IWM', 'QQQ', 'IEV', 'EWJ', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'LQD', 'HYG','IEF', 'LQD', 'BIL','SHY', 'MDY', 'EFA','AGG']
 
 # Carpeta donde están los CSV en tu repo
 DATA_DIR = os.path.join("taa-dashboard", "data")
