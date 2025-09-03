@@ -1196,15 +1196,23 @@ def format_signal_for_display(signal_dict):
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
-# Función para actualizar CSVs en GitHub
+# Función para actualizar CSVs en GitHub (VERSIÓN CORREGIDA)
 def update_csvs_github(token, repo_owner, repo_name, data_folder="data"):
     """Actualiza los archivos CSV en GitHub con datos más recientes"""
-    if not token:
-        st.error("⚠️ Token de GitHub no proporcionado")
+    if not token or not token.strip():
+        st.error("⚠️ Token de GitHub no proporcionado o inválido")
         return False
         
     try:
+        # Validar el formato del token
+        if not token.startswith('ghp_') and not token.startswith('github_pat_'):
+            st.warning("⚠️ El token no parece tener el formato correcto. Asegúrate de usar un Personal Access Token (PAT)")
+        
         # Obtener lista de archivos CSV en la carpeta data
+        if not os.path.exists(data_folder):
+            st.error(f"❌ La carpeta '{data_folder}' no existe")
+            return False
+            
         files = os.listdir(data_folder)
         csv_files = [f for f in files if f.endswith('.csv')]
         
@@ -1213,16 +1221,37 @@ def update_csvs_github(token, repo_owner, repo_name, data_folder="data"):
             return False
             
         success_count = 0
-        for csv_file in csv_files:
+        total_files = len(csv_files)
+        
+        # Barra de progreso
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        headers = {
+            "Authorization": f"Bearer {token.strip()}",  # Usar Bearer en lugar de token
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "TAA-Dashboard-App"
+        }
+        
+        for idx, csv_file in enumerate(csv_files):
             ticker = csv_file.replace('.csv', '')
             try:
+                # Actualizar barra de progreso
+                progress = (idx) / total_files
+                progress_bar.progress(progress)
+                status_text.text(f"Actualizando {ticker}... ({idx+1}/{total_files})")
+                
                 # Descargar datos nuevos de yfinance
-                data = yf.download(ticker, period="max", progress=False)
+                status_text.text(f"Descargando datos de {ticker}...")
+                data = yf.download(ticker, period="max", progress=False, timeout=30)
                 
                 if data.empty:
                     st.warning(f"⚠️ No se encontraron datos para {ticker}")
                     continue
-                    
+                
+                # Eliminar duplicados y ordenar por fecha
+                data = data.dropna().sort_index()
+                
                 # Formatear datos para CSV
                 data = data.reset_index()
                 data = data.rename(columns={
@@ -1235,83 +1264,128 @@ def update_csvs_github(token, repo_owner, repo_name, data_folder="data"):
                 })
                 
                 # Crear contenido CSV
-                csv_content = "Date,Open,High,Low,Close,Volume\n"
-                for idx, row in data.iterrows():
-                    csv_content += f"{row['date'].strftime('%Y-%m-%d')},{row['open']:.2f},{row['high']:.2f},{row['low']:.2f},{row['close']:.2f},{row['volume']}\n"
+                csv_content = "date,open,high,low,close,volume\n"
+                for _, row in data.iterrows():
+                    csv_content += f"{row['date'].strftime('%Y-%m-%d')},{row['open']:.2f},{row['high']:.2f},{row['low']:.2f},{row['close']:.2f},{int(row['volume'])}\n"
                 
-                # Obtener SHA actual del archivo (si existe)
+                # Preparar para subida
                 file_path = f"{data_folder}/{csv_file}"
-                sha = None
                 
-                # Verificar si el archivo existe en GitHub
+                # Obtener SHA actual del archivo
+                sha = None
+                url = f"https://api.github.com/repos/{repo_owner.strip()}/{repo_name.strip()}/contents/{file_path}"
+                
                 try:
-                    url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
-                    headers = {
-                        "Authorization": f"token {token}",
-                        "Accept": "application/vnd.github.v3+json"
-                    }
-                    response = requests.get(url, headers=headers)
+                    response = requests.get(url, headers=headers, timeout=10)
                     if response.status_code == 200:
                         sha = response.json()['sha']
-                except:
-                    pass  # Si no se puede obtener el SHA, se crea como nuevo
+                    elif response.status_code == 404:
+                        # El archivo no existe, lo crearemos
+                        sha = None
+                    else:
+                        st.error(f"Error verificando {csv_file}: {response.status_code}")
+                        continue
+                        
+                except requests.exceptions.RequestException as e:
+                    st.error(f"Error de conexión verificando {csv_file}: {e}")
+                    continue
+                
+                # Preparar payload
+                payload = {
+                    "message": f"Update {ticker} data - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    "content": base64.b64encode(csv_content.encode('utf-8')).decode('utf-8'),
+                    "branch": "main"  # Especificar rama
+                }
+                
+                if sha:
+                    payload["sha"] = sha
                 
                 # Subir archivo actualizado
-                url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/contents/{file_path}"
-                payload = {
-                    "message": f"Update {ticker} data - {datetime.now().strftime('%Y-%m-%d')}",
-                    "content": base64.b64encode(csv_content.encode()).decode(),
-                    "sha": sha
-                }
-                
-                headers = {
-                    "Authorization": f"token {token}",
-                    "Accept": "application/vnd.github.v3+json"
-                }
-                
-                response = requests.put(url, headers=headers, data=json.dumps(payload))
+                response = requests.put(url, headers=headers, json=payload, timeout=30)
                 
                 if response.status_code in [200, 201]:
-                    st.success(f"✅ Archivo {csv_file} actualizado en GitHub")
                     success_count += 1
+                    status_text.text(f"✅ {ticker} actualizado ({success_count}/{total_files})")
                 else:
-                    st.error(f"❌ Error al actualizar {csv_file}: {response.status_code}")
-                    st.error(response.text)
-                    
-            except Exception as e:
-                st.error(f"❌ Error actualizando {csv_file}: {e}")
+                    st.error(f"❌ Error actualizando {csv_file}: {response.status_code}")
+                    try:
+                        error_msg = response.json()
+                        st.error(f"Detalles: {error_msg}")
+                    except:
+                        st.error(response.text)
+                        
+                # Pequeña pausa para evitar límites de API
+                time.sleep(0.5)
                 
-        st.success(f"✅ Actualización completada: {success_count}/{len(csv_files)} archivos actualizados")
+            except Exception as e:
+                st.error(f"❌ Error procesando {csv_file}: {e}")
+                continue
+        
+        # Completar barra de progreso
+        progress_bar.progress(1.0)
+        status_text.text(f"✅ Proceso completado: {success_count}/{total_files} archivos actualizados")
+        
+        if success_count > 0:
+            st.success(f"✅ Actualización completada: {success_count}/{total_files} archivos actualizados")
+            st.info("Los cambios pueden tardar unos minutos en verse reflejados en GitHub")
+        else:
+            st.warning("⚠️ No se actualizó ningún archivo")
+            
         return success_count > 0
         
+    except requests.exceptions.RequestException as e:
+        st.error(f"❌ Error de conexión: {e}")
+        st.info("Verifica tu conexión a internet y que el repositorio sea accesible")
+        return False
     except Exception as e:
         st.error(f"❌ Error en actualización masiva: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return False
 
-# Función para actualizar CSVs localmente
+# Función mejorada para actualizar CSVs localmente
 def update_csvs_local(data_folder="data"):
     """Actualiza los archivos CSV localmente con datos más recientes"""
     try:
-        # Obtener lista de archivos CSV en la carpeta data
+        # Verificar que existe la carpeta data
+        if not os.path.exists(data_folder):
+            os.makedirs(data_folder, exist_ok=True)
+            
+        # Obtener lista de archivos CSV existentes
         files = os.listdir(data_folder)
         csv_files = [f for f in files if f.endswith('.csv')]
         
         if not csv_files:
-            st.warning("⚠️ No se encontraron archivos CSV para actualizar")
-            return False
-            
+            # Si no hay archivos, crear algunos básicos
+            st.info("No se encontraron archivos CSV. Descargando datos básicos...")
+            basic_tickers = ['SPY', 'QQQ', 'IWM', 'EFA', 'EEM', 'TLT', 'GLD', 'VNQ']
+            csv_files = [f"{ticker}.csv" for ticker in basic_tickers]
+        else:
+            basic_tickers = [f.replace('.csv', '') for f in csv_files]
+        
         success_count = 0
-        for csv_file in csv_files:
-            ticker = csv_file.replace('.csv', '')
+        total_files = len(basic_tickers if 'basic_tickers' in locals() else csv_files)
+        
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        tickers_to_process = basic_tickers if 'basic_tickers' in locals() else [f.replace('.csv', '') for f in csv_files]
+        
+        for idx, ticker in enumerate(tickers_to_process):
             try:
-                # Descargar datos nuevos de yfinance
-                data = yf.download(ticker, period="max", progress=False)
+                progress = (idx) / total_files
+                progress_bar.progress(progress)
+                status_text.text(f"Descargando {ticker}... ({idx+1}/{total_files})")
+                
+                # Descargar datos nuevos de yfinance con timeout
+                data = yf.download(ticker, period="max", progress=False, timeout=30)
                 
                 if data.empty:
                     st.warning(f"⚠️ No se encontraron datos para {ticker}")
                     continue
-                    
-                # Formatear datos para CSV
+                
+                # Limpiar y formatear datos
+                data = data.dropna().sort_index()
                 data = data.reset_index()
                 data = data.rename(columns={
                     'Date': 'date', 
@@ -1323,22 +1397,33 @@ def update_csvs_local(data_folder="data"):
                 })
                 
                 # Guardar archivo CSV
-                file_path = f"{data_folder}/{csv_file}"
+                file_path = f"{data_folder}/{ticker}.csv"
                 data.to_csv(file_path, index=False)
                 
-                st.success(f"✅ Archivo {csv_file} actualizado localmente")
                 success_count += 1
+                status_text.text(f"✅ {ticker} actualizado ({success_count}/{total_files})")
+                
+                # Pequeña pausa
+                time.sleep(0.1)
                 
             except Exception as e:
-                st.error(f"❌ Error actualizando {csv_file}: {e}")
-                
-        st.success(f"✅ Actualización local completada: {success_count}/{len(csv_files)} archivos actualizados")
+                st.error(f"❌ Error actualizando {ticker}: {e}")
+                continue
+        
+        progress_bar.progress(1.0)
+        status_text.text(f"✅ Actualización local completada: {success_count}/{total_files} archivos")
+        
+        if success_count > 0:
+            st.success(f"✅ Actualización local completada: {success_count}/{total_files} archivos actualizados")
+            st.info(f"Los archivos están en la carpeta: {os.path.abspath(data_folder)}")
+        
         return success_count > 0
         
     except Exception as e:
         st.error(f"❌ Error en actualización local: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return False
-
 # ------------- MAIN -------------
 if st.sidebar.button("🚀 Ejecutar", type="primary"):
     if not active:
@@ -2013,24 +2098,55 @@ else:
     st.info("👈 Configura y ejecuta")
 
 # Botón para actualizar CSVs en GitHub
+# Reemplazar la sección del sidebar con estos botones mejorados
 st.sidebar.markdown("---")
 st.sidebar.header("🔄 Actualización de Datos")
 
-if st.sidebar.button("🔄 Actualizar CSVs en GitHub"):
-    if GITHUB_TOKEN:
-        with st.spinner("Actualizando archivos CSV en GitHub..."):
-            success = update_csvs_github(GITHUB_TOKEN, "jmlestevez-source", "taa-dashboard")
-            if success:
-                st.success("✅ Actualización en GitHub completada exitosamente")
-            else:
-                st.error("❌ Error en la actualización en GitHub")
-    else:
-        st.warning("⚠️ Por favor ingresa tu token de GitHub")
+# Información sobre el token
+with st.sidebar.expander("ℹ️ Información sobre el Token de GitHub"):
+    st.markdown("""
+    **Para obtener tu token de GitHub:**
+    1. Ve a [GitHub Settings](https://github.com/settings/tokens)
+    2. Clic en "Generate new token (classic)"
+    3. Selecciona estos scopes:
+       - `repo` (acceso completo)
+       - `workflow` (si usas Actions)
+    4. Copia el token generado
+    """)
 
-if st.sidebar.button("🔄 Actualizar CSVs Localmente"):
-    with st.spinner("Actualizando archivos CSV localmente..."):
-        success = update_csvs_local()
-        if success:
-            st.success("✅ Actualización local completada exitosamente")
+# Campo de token mejorado
+GITHUB_TOKEN = st.sidebar.text_input(
+    "🔐 Token de GitHub", 
+    type="password",
+    help="Ingresa tu Personal Access Token de GitHub"
+)
+
+# Validar formato del token
+if GITHUB_TOKEN and not (GITHUB_TOKEN.startswith('ghp_') or GITHUB_TOKEN.startswith('github_pat_')):
+    st.sidebar.warning("⚠️ El token no tiene el formato esperado")
+
+# Botones de actualización
+col1, col2 = st.sidebar.columns(2)
+
+with col1:
+    if st.button("🔄 GitHub", key="github_update", help="Actualizar CSVs en GitHub"):
+        if GITHUB_TOKEN and GITHUB_TOKEN.strip():
+            with st.spinner("Actualizando GitHub..."):
+                success = update_csvs_github(GITHUB_TOKEN.strip(), "jmlestevez-source", "taa-dashboard")
+                if success:
+                    st.balloons()
+                    st.success("✅ GitHub actualizado!")
+                else:
+                    st.error("❌ Falló actualización")
         else:
-            st.error("❌ Error en la actualización local")
+            st.sidebar.error("⚠️ Necesitas ingresar un token válido")
+
+with col2:
+    if st.button("💾 Local", key="local_update", help="Actualizar CSVs localmente"):
+        with st.spinner("Actualizando localmente..."):
+            success = update_csvs_local()
+            if success:
+                st.balloons()
+                st.success("✅ Local actualizado!")
+            else:
+                st.error("❌ Falló actualización")
