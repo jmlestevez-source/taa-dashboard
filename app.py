@@ -11,12 +11,15 @@ import os
 import pickle
 import hashlib
 
+# Nueva importación para yfinance
+import yfinance as yf
+
 # ------------- CONFIG -------------
 st.set_page_config(page_title="🎯 TAA Dashboard", layout="wide")
 st.title("🎯 Multi-Strategy Tactical Asset Allocation")
 
 # ------------- SIDEBAR -------------
-initial_capital = st.sidebar.number_input("💰 Capital Inicial ($)", 1000, 10_000_000, 100_000, 1000)
+initial_capital = st.sidebar.number_input("💰 Capital Inicial ($)", 1000, 10_000_000, 100000, 1000)
 start_date = st.sidebar.date_input("Fecha de inicio", datetime(2015, 1, 1))
 end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today())
 
@@ -64,11 +67,12 @@ SISTEMA_DESCORRELACION = {
     "main": ['VTI', 'GLD', 'TLT'],
     "secondary": ['SPY', 'QQQ', 'MDY', 'EFA']
 }
-# Nueva estrategia: HAA (Hybrid Adaptive Asset Allocation)
-HAA = {
-    "offensive_universe": ['SPY', 'IWM', 'EFA', 'EEM', 'VNQ', 'DBC', 'IEF', 'TLT'],
-    "canary": ['TIP'],
-    "cash_proxy_candidates": ['IEF', 'BIL'] # Para representar efectivo y alternativas defensivas
+# Nueva estrategia: Sistema Retorno y Correlación
+SISTEMA_RETORNO_CORRELACION = {
+    "assets": ['SPY', 'QQQ', 'IEV', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'HYG', 'LQD'], # Universo de activos
+    "lookback_period": 126, # 6 meses (126 días hábiles)
+    "num_assets": 5, # Número de activos a seleccionar
+    "min_correlation": 0.5 # Correlación mínima para diversificación
 }
 
 ALL_STRATEGIES = {
@@ -80,7 +84,7 @@ ALL_STRATEGIES = {
     "Quint Switching Filtered": QUINT_SWITCHING_FILTERED,
     "BAA Aggressive": BAA_AGGRESSIVE,
     "Sistema Descorrelación": SISTEMA_DESCORRELACION,
-    "HAA": HAA # Añadida la nueva estrategia
+    "Sistema Retorno y Correlación": SISTEMA_RETORNO_CORRELACION # Añadida la nueva estrategia
 }
 
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
@@ -132,9 +136,42 @@ def get_available_fmp_key():
     st.warning("⚠️ Todas las API keys de FMP han alcanzado el límite diario.")
     return min(FMP_KEYS, key=lambda k: FMP_CALLS[k])
 
-# ------------- DESCARGA (Solo CSV desde GitHub + FMP) -------------
+# ------------- DESCARGA (Solo CSV desde GitHub + FMP + yfinance para ^VIX) -------------
 # Variable global para rastrear errores durante la descarga
 _DOWNLOAD_ERRORS_OCCURRED = False
+
+# --- NUEVA FUNCIÓN PARA DESCARGAR DATOS DE ^VIX CON YFINANCE ---
+def get_yfinance_data_single(ticker, start, end):
+    """Descarga datos usando yfinance para un solo ticker"""
+    global _DOWNLOAD_ERRORS_OCCURRED
+    try:
+        # st.write(f"🔄 Descargando {ticker} desde yfinance...") # Ocultar log
+        # Asegurarse de que las fechas sean datetime.date
+        if isinstance(start, pd.Timestamp):
+            start = start.date()
+        if isinstance(end, pd.Timestamp):
+            end = end.date()
+        
+        # Descargar datos
+        df = yf.download(ticker, start=start, end=end, progress=False)
+        
+        if df is not None and not df.empty:
+            # Seleccionar la columna 'Close' y renombrarla
+            close_series = df['Close'].rename(ticker)
+            # Convertir a DataFrame
+            df_final = close_series.to_frame()
+            # Asegurar que el índice sea datetime
+            df_final.index = pd.to_datetime(df_final.index)
+            # st.write(f"✅ {ticker} descargado desde yfinance - {len(df_final)} registros") # Ocultar log
+            return df_final
+        else:
+            st.warning(f"⚠️ No se obtuvieron datos para {ticker} desde yfinance")
+            _DOWNLOAD_ERRORS_OCCURRED = True
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"❌ Error descargando {ticker} desde yfinance: {e}")
+        _DOWNLOAD_ERRORS_OCCURRED = True
+        return pd.DataFrame()
 
 def should_use_fmp(csv_df, days_threshold=7):
     """Verifica si es necesario usar FMP basado en la frescura de los datos CSV"""
@@ -470,28 +507,32 @@ def momentum_score_13612w(df, symbol):
     except Exception:
         return 0
 
-# Nueva función auxiliar para HAA
-def haa_momentum_score(df, symbol):
-    """Calcula el momentum score HAA: media no ponderada de ROC_1M, ROC_3M, ROC_6M, ROC_12M"""
-    if len(df) < 13: # Necesita al menos 13 meses para ROC_12M
+# Función auxiliar para Sistema Retorno y Correlación
+def sistema_retorno_correlacion_score(df, symbol):
+    """Calcula el score de Sistema Retorno y Correlación: (ROC_6M - ROC_12M) / Volatilidad_12M"""
+    if len(df) < 13: # Necesita al menos 13 meses para ROC_12M y Vol_12M
         return float('-inf')
     try:
-        p0 = df[symbol].iloc[-1]   # Precio actual
-        p1 = df[symbol].iloc[-2]   # Hace 1 mes
-        p3 = df[symbol].iloc[-4]   # Hace 3 meses
-        p6 = df[symbol].iloc[-7]   # Hace 6 meses
-        p12 = df[symbol].iloc[-13] # Hace 12 meses
+        p0 = df[symbol].iloc[-1]
+        p6 = df[symbol].iloc[-7]
+        p12 = df[symbol].iloc[-13]
         
-        if p1 <= 0 or p3 <= 0 or p6 <= 0 or p12 <= 0:
+        if p6 <= 0 or p12 <= 0:
             return float('-inf')
-            
-        roc_1 = (p0 / p1) - 1
-        roc_3 = (p0 / p3) - 1
-        roc_6 = (p0 / p6) - 1
-        roc_12 = (p0 / p12) - 1
         
-        # Media no ponderada
-        score = (roc_1 + roc_3 + roc_6 + roc_12) / 4
+        roc_6m = (p0 / p6) - 1
+        roc_12m = (p0 / p12) - 1
+        
+        # Calcular volatilidad de los últimos 12 meses (12 retornos mensuales)
+        returns_12m = df[symbol].pct_change().iloc[-12:]
+        if len(returns_12m) < 2 or returns_12m.isnull().any() or (returns_12m == 0).all():
+            return float('-inf')
+        vol_12m = returns_12m.std()
+        
+        if vol_12m == 0 or pd.isna(vol_12m):
+            return float('-inf')
+        
+        score = (roc_6m - roc_12m) / vol_12m
         return score
     except Exception:
         return float('-inf')
@@ -1014,119 +1055,153 @@ def weights_sistema_descorrelacion(df, main, secondary):
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
-# Nueva función para HAA
-def weights_haa(df, offensive_universe, canary, cash_proxy_candidates):
-    """Calcula señales para HAA (Hybrid Adaptive Asset Allocation)"""
-    if len(df) < 13:
+# Nueva función para Sistema Retorno y Correlación
+def weights_sistema_retorno_correlacion(df, assets, lookback_period, num_assets, min_correlation):
+    """Calcula señales para Sistema Retorno y Correlación"""
+    if len(df) < lookback_period + 1: # Necesita al menos lookback_period + 1 meses
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
-    for i in range(13, len(df)):
+    for i in range(lookback_period + 1, len(df)):
         try:
             df_subset = df.iloc[:i]
-            # Etapa 1: Evaluar el canario TIPS
-            if canary and len(canary) > 0:
-                tip_symbol = canary[0] # Asumimos que el primer elemento es TIP
-                if tip_symbol in df_subset.columns:
-                    tip_momentum = haa_momentum_score(df_subset, tip_symbol)
-                else:
-                    # Si no hay datos de TIP, asumimos mercado normal
-                    tip_momentum = 0
-            else:
-                tip_momentum = 0 # Fallback
-            
-            w = {}
-            if tip_momentum > 0: # Etapa 2a: Modo Ofensivo
-                # Calcular momentum para el universo ofensivo
-                offensive_momentum = {s: haa_momentum_score(df_subset, s) for s in offensive_universe if s in df_subset.columns}
-                # Filtrar scores válidos
-                valid_offensive_momentum = {k: v for k, v in offensive_momentum.items() if not np.isinf(v) and not np.isnan(v)}
-                if len(valid_offensive_momentum) >= 4:
-                    # Seleccionar los 4 con mejor momentum
-                    top_4_offensive = sorted(valid_offensive_momentum.items(), key=lambda item: item[1], reverse=True)[:4]
-                    # Asignar 25% a cada uno si su momentum es positivo, sino ir a efectivo
-                    # Determinar el mejor proxy de efectivo
-                    cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
-                    valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
-                    if valid_cash_proxy_momentum:
-                        best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
-                    else:
-                        best_cash_proxy = 'BIL' # Default
-                    
-                    for asset, momentum_score in top_4_offensive:
-                        if momentum_score > 0:
-                            w[asset] = w.get(asset, 0) + 0.25
-                        else:
-                            # Si el momentum es negativo, asignar a efectivo
-                            w[best_cash_proxy] = w.get(best_cash_proxy, 0) + 0.25
-                # Si hay menos de 4 activos válidos, se podría manejar de otra forma,
-                # pero por simplicidad dejamos la cartera vacía o con efectivo.
+            # Calcular momentum score para cada activo
+            momentum_scores = {s: sistema_retorno_correlacion_score(df_subset, s) for s in assets if s in df_subset.columns}
+            # Filtrar scores válidos
+            valid_momentum_scores = {k: v for k, v in momentum_scores.items() if not np.isinf(v) and not np.isnan(v)}
+            if len(valid_momentum_scores) >= num_assets:
+                # Seleccionar los num_assets con mejor momentum
+                top_assets = sorted(valid_momentum_scores.items(), key=lambda item: item[1], reverse=True)[:num_assets]
+                # Calcular retornos de lookback_period días para los activos seleccionados
+                returns_lookback = df_subset[list(valid_momentum_scores.keys())].pct_change().iloc[-lookback_period:]
+                if len(returns_lookback) >= 2:
+                    # Calcular matriz de correlación
+                    corr_matrix = returns_lookback.corr()
+                    # Filtrar la matriz de correlación para los activos seleccionados
+                    selected_assets = [asset for asset, score in top_assets]
+                    selected_corr_matrix = corr_matrix.loc[selected_assets, selected_assets]
+                    if not selected_corr_matrix.isnull().any().any() and not (selected_corr_matrix == 0).all().all():
+                        # Optimización de mínima varianza con restricción de correlación
+                        try:
+                            from scipy.optimize import minimize
                             
-            else: # Etapa 2b: Modo Defensivo
-                # Asignar 100% al mejor activo entre los candidatos a efectivo
-                cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
-                valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
-                if valid_cash_proxy_momentum:
-                    best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
-                    w[best_cash_proxy] = 1.0
+                            def objective(weights, cov_matrix):
+                                return np.dot(weights.T, np.dot(cov_matrix, weights))
+                            
+                            def constraint_sum(weights):
+                                return np.sum(weights) - 1
+                            
+                            # Restricción de correlación mínima
+                            def constraint_corr(weights, corr_matrix, min_corr):
+                                # Calcular la correlación promedio ponderada
+                                avg_corr = np.dot(weights.T, np.dot(corr_matrix, weights)) / np.dot(weights.T, weights)
+                                return avg_corr - min_corr
+                            
+                            n_assets = len(selected_assets)
+                            initial_weights = np.array([1/n_assets] * n_assets)
+                            bounds = tuple((0, 1) for _ in range(n_assets))
+                            constraints = [{'type': 'eq', 'fun': constraint_sum}]
+                            
+                            # Añadir restricción de correlación mínima
+                            constraints.append({'type': 'ineq', 'fun': constraint_corr, 'args': (selected_corr_matrix.values, min_correlation)})
+                            
+                            result = minimize(objective, initial_weights, args=(selected_corr_matrix.values,), 
+                                            method='SLSQP', bounds=bounds, constraints=constraints)
+                            
+                            if result.success:
+                                optimal_weights = result.x
+                                w = dict(zip(selected_assets, optimal_weights))
+                            else:
+                                # Si la optimización falla, asignar igualmente
+                                w = {asset: 1.0/len(selected_assets) for asset, score in top_assets}
+                        except ImportError:
+                            # Si scipy no está disponible, asignar igualmente
+                            w = {asset: 1.0/len(selected_assets) for asset, score in top_assets}
+                        except Exception:
+                            # Si hay otros errores en la optimización, asignar igualmente
+                            w = {asset: 1.0/len(selected_assets) for asset, score in top_assets}
+                    else:
+                        # Si hay problemas con la correlación, asignar igualmente
+                        w = {asset: 1.0/len(selected_assets) for asset, score in top_assets}
                 else:
-                    # Si no hay proxies de efectivo válidos, asignar a BIL por defecto
-                    w['BIL'] = 1.0
-                    
+                    # Si no hay suficientes datos para correlación, asignar igualmente
+                    w = {asset: 1.0/len(selected_assets) for asset, score in top_assets}
+            else:
+                # Si no hay suficientes activos válidos, asignar igualmente entre los disponibles
+                if valid_momentum_scores:
+                    n_avail = len(valid_momentum_scores)
+                    w = {asset: 1.0 / n_avail for asset in valid_momentum_scores.keys()}
+                else:
+                    # Si no hay activos válidos, w queda vacío (efectivo)
+                    w = {}
             sig.append((df.index[i], w))
         except Exception as e:
             sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
     
     # Señal para el último periodo
-    if len(df) >= 13:
+    if len(df) >= lookback_period + 1:
          try:
              df_subset = df
-             # Etapa 1: Evaluar el canario TIPS
-             if canary and len(canary) > 0:
-                 tip_symbol = canary[0] # Asumimos que el primer elemento es TIP
-                 if tip_symbol in df_subset.columns:
-                     tip_momentum = haa_momentum_score(df_subset, tip_symbol)
-                 else:
-                     # Si no hay datos de TIP, asumimos mercado normal
-                     tip_momentum = 0
-             else:
-                 tip_momentum = 0 # Fallback
-             
-             w = {}
-             if tip_momentum > 0: # Etapa 2a: Modo Ofensivo
-                 # Calcular momentum para el universo ofensivo
-                 offensive_momentum = {s: haa_momentum_score(df_subset, s) for s in offensive_universe if s in df_subset.columns}
-                 # Filtrar scores válidos
-                 valid_offensive_momentum = {k: v for k, v in offensive_momentum.items() if not np.isinf(v) and not np.isnan(v)}
-                 if len(valid_offensive_momentum) >= 4:
-                     # Seleccionar los 4 con mejor momentum
-                     top_4_offensive = sorted(valid_offensive_momentum.items(), key=lambda item: item[1], reverse=True)[:4]
-                     # Asignar 25% a cada uno si su momentum es positivo, sino ir a efectivo
-                     # Determinar el mejor proxy de efectivo
-                     cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
-                     valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
-                     if valid_cash_proxy_momentum:
-                         best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
-                     else:
-                         best_cash_proxy = 'BIL' # Default
-                     
-                     for asset, momentum_score in top_4_offensive:
-                         if momentum_score > 0:
-                             w[asset] = w.get(asset, 0) + 0.25
-                         else:
-                             # Si el momentum es negativo, asignar a efectivo
-                             w[best_cash_proxy] = w.get(best_cash_proxy, 0) + 0.25
+             momentum_scores = {s: sistema_retorno_correlacion_score(df_subset, s) for s in assets if s in df_subset.columns}
+             valid_momentum_scores = {k: v for k, v in momentum_scores.items() if not np.isinf(v) and not np.isnan(v)}
+             if len(valid_momentum_scores) >= num_assets:
+                 top_assets = sorted(valid_momentum_scores.items(), key=lambda item: item[1], reverse=True)[:num_assets]
+                 returns_lookback = df_subset[list(valid_momentum_scores.keys())].pct_change().iloc[-lookback_period:]
+                 if len(returns_lookback) >= 2:
+                     corr_matrix = returns_lookback.corr()
+                     selected_assets = [asset for asset, score in top_assets]
+                     selected_corr_matrix = corr_matrix.loc[selected_assets, selected_assets]
+                     if not selected_corr_matrix.isnull().any().any() and not (selected_corr_matrix == 0).all().all():
+                         try:
+                             from scipy.optimize import minimize
                              
-             else: # Etapa 2b: Modo Defensivo
-                 # Asignar 100% al mejor activo entre los candidatos a efectivo
-                 cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
-                 valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
-                 if valid_cash_proxy_momentum:
-                     best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
-                     w[best_cash_proxy] = 1.0
+                             def objective(weights, cov_matrix):
+                                 return np.dot(weights.T, np.dot(cov_matrix, weights))
+                             
+                             def constraint_sum(weights):
+                                 return np.sum(weights) - 1
+                             
+                             # Restricción de correlación mínima
+                             def constraint_corr(weights, corr_matrix, min_corr):
+                                 # Calcular la correlación promedio ponderada
+                                 avg_corr = np.dot(weights.T, np.dot(corr_matrix, weights)) / np.dot(weights.T, weights)
+                                 return avg_corr - min_corr
+                             
+                             n_assets = len(selected_assets)
+                             initial_weights = np.array([1/n_assets] * n_assets)
+                             bounds = tuple((0, 1) for _ in range(n_assets))
+                             constraints = [{'type': 'eq', 'fun': constraint_sum}]
+                             
+                             # Añadir restricción de correlación mínima
+                             constraints.append({'type': 'ineq', 'fun': constraint_corr, 'args': (selected_corr_matrix.values, min_correlation)})
+                             
+                             result = minimize(objective, initial_weights, args=(selected_corr_matrix.values,), 
+                                             method='SLSQP', bounds=bounds, constraints=constraints)
+                             
+                             if result.success:
+                                 optimal_weights = result.x
+                                 w = dict(zip(selected_assets, optimal_weights))
+                             else:
+                                 # Si la optimización falla, asignar igualmente
+                                 w = {asset: 1.0/len(selected_assets) for asset, score in top_assets}
+                         except ImportError:
+                             # Si scipy no está disponible, asignar igualmente
+                             w = {asset: 1.0/len(selected_assets) for asset, score in top_assets}
+                         except Exception:
+                             # Si hay otros errores en la optimización, asignar igualmente
+                             w = {asset: 1.0/len(selected_assets) for asset, score in top_assets}
+                     else:
+                         # Si hay problemas con la correlación, asignar igualmente
+                         w = {asset: 1.0/len(selected_assets) for asset, score in top_assets}
                  else:
-                     # Si no hay proxies de efectivo válidos, asignar a BIL por defecto
-                     w['BIL'] = 1.0
-                     
+                     # Si no hay suficientes datos para correlación, asignar igualmente
+                     w = {asset: 1.0/len(selected_assets) for asset, score in top_assets}
+             else:
+                 if valid_momentum_scores:
+                     n_avail = len(valid_momentum_scores)
+                     w = {asset: 1.0 / n_avail for asset in valid_momentum_scores.keys()}
+                 else:
+                     # Si no hay activos válidos, w queda vacío (efectivo)
+                     w = {}
              sig.append((df.index[-1], w))
          except Exception as e:
              sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
@@ -1145,7 +1220,7 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}"
              })
-    if not formatted_data:
+    if not formatted_
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
@@ -1172,10 +1247,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             elif s == "Sistema Descorrelación":
                 all_tickers_needed.update(strategy["main"])
                 all_tickers_needed.update(strategy["secondary"])
-            elif s == "HAA": # Manejo de la nueva estrategia
-                all_tickers_needed.update(strategy["offensive_universe"])
-                all_tickers_needed.update(strategy["canary"])
-                all_tickers_needed.update(strategy["cash_proxy_candidates"])
+            elif s == "Sistema Retorno y Correlación": # Manejo de la nueva estrategia
+                all_tickers_needed.update(strategy["assets"])
             else:
                 for key in ["risky", "protect", "canary", "universe", "fill", "equity", "protective", "safe"]:
                     if key in strategy:
@@ -1206,8 +1279,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.stop()
         # --- Calcular señales antes de filtrar ---
         last_data_date = df.index.max()
-        # Obtener el último día del mes ANTERIOR al último dato disponible
-        last_month_end_for_real_signal = (last_data_date.replace(day=1) - timedelta(days=1)).replace(day=1) + pd.offsets.MonthEnd(0)
+        # CORREGIDO: Obtener el último día del mes COMPLETO anterior al último dato disponible
+        # Esto asegura que la señal "REAL" se calcule con datos hasta el final del mes anterior
+        # Ejemplo: Si last_data_date es 2025-09-02, last_month_end_for_real_signal será 2025-08-31
+        last_month_end_for_real_signal = (last_data_date.replace(day=1) - timedelta(days=1))
         df_up_to_last_month_end = df[df.index <= last_month_end_for_real_signal]
         df_full = df
         signals_dict_last = {}
@@ -1269,15 +1344,17 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_current = weights_sistema_descorrelacion(df_full,
                                                                  ALL_STRATEGIES[s]["main"],
                                                                  ALL_STRATEGIES[s]["secondary"])
-                elif s == "HAA": # Integración de la nueva estrategia
-                    sig_last = weights_haa(df_up_to_last_month_end,
-                                          ALL_STRATEGIES[s]["offensive_universe"],
-                                          ALL_STRATEGIES[s]["canary"],
-                                          ALL_STRATEGIES[s]["cash_proxy_candidates"])
-                    sig_current = weights_haa(df_full,
-                                           ALL_STRATEGIES[s]["offensive_universe"],
-                                           ALL_STRATEGIES[s]["canary"],
-                                           ALL_STRATEGIES[s]["cash_proxy_candidates"])
+                elif s == "Sistema Retorno y Correlación": # Integración de la nueva estrategia
+                    sig_last = weights_sistema_retorno_correlacion(df_up_to_last_month_end,
+                                                                 ALL_STRATEGIES[s]["assets"],
+                                                                 ALL_STRATEGIES[s]["lookback_period"],
+                                                                 ALL_STRATEGIES[s]["num_assets"],
+                                                                 ALL_STRATEGIES[s]["min_correlation"])
+                    sig_current = weights_sistema_retorno_correlacion(df_full,
+                                                                    ALL_STRATEGIES[s]["assets"],
+                                                                    ALL_STRATEGIES[s]["lookback_period"],
+                                                                    ALL_STRATEGIES[s]["num_assets"],
+                                                                    ALL_STRATEGIES[s]["min_correlation"])
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]
                     # st.write(f"📝 Señal REAL para {s}: {sig_last[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
@@ -1363,11 +1440,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     strategy_signals[s] = weights_sistema_descorrelacion(df_filtered,
                                                                        ALL_STRATEGIES[s]["main"],
                                                                        ALL_STRATEGIES[s]["secondary"])
-                elif s == "HAA": # Integración de la nueva estrategia
-                    strategy_signals[s] = weights_haa(df_filtered,
-                                                     ALL_STRATEGIES[s]["offensive_universe"],
-                                                     ALL_STRATEGIES[s]["canary"],
-                                                     ALL_STRATEGIES[s]["cash_proxy_candidates"])
+                elif s == "Sistema Retorno y Correlación": # Integración de la nueva estrategia
+                    strategy_signals[s] = weights_sistema_retorno_correlacion(df_filtered,
+                                                                           ALL_STRATEGIES[s]["assets"],
+                                                                           ALL_STRATEGIES[s]["lookback_period"],
+                                                                           ALL_STRATEGIES[s]["num_assets"],
+                                                                           ALL_STRATEGIES[s]["min_correlation"])
             # 2. Preparar estructura para la cartera combinada
             rebalance_dates = [sig[0] for sig in strategy_signals[active[0]]] if active and strategy_signals.get(active[0]) else []
             if not rebalance_dates:
@@ -1476,11 +1554,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      sig_list = weights_sistema_descorrelacion(df_filtered,
                                                              ALL_STRATEGIES[s]["main"],
                                                              ALL_STRATEGIES[s]["secondary"])
-                 elif s == "HAA": # Integración de la nueva estrategia
-                     sig_list = weights_haa(df_filtered,
-                                           ALL_STRATEGIES[s]["offensive_universe"],
-                                           ALL_STRATEGIES[s]["canary"],
-                                           ALL_STRATEGIES[s]["cash_proxy_candidates"])
+                 elif s == "Sistema Retorno y Correlación": # Integración de la nueva estrategia
+                     sig_list = weights_sistema_retorno_correlacion(df_filtered,
+                                                                  ALL_STRATEGIES[s]["assets"],
+                                                                  ALL_STRATEGIES[s]["lookback_period"],
+                                                                  ALL_STRATEGIES[s]["num_assets"],
+                                                                  ALL_STRATEGIES[s]["min_correlation"])
                  rebalance_dates_ind = [sig[0] for sig in sig_list]
                  signals_dict_ind = {sig[0]: sig[1] for sig in sig_list}
                  if not rebalance_dates_ind:
@@ -1516,7 +1595,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
         # ---------- MOSTRAR RESULTADOS ----------
         try:
-            tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active]
+            # Determinar nombres de pestañas, incluyendo la nueva pestaña de logs
+            tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active] + ["📝 Log de Señales"]
             tabs = st.tabs(tab_names)
             # ---- TAB 0: COMBINADA ----
             with tabs[0]:
@@ -1589,14 +1669,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.subheader("📅 Retornos Mensuales por Año")
                 try:
                     # Obtener retornos mensuales para la cartera combinada
-                    returns = comb_series.pct_change().dropna()
-                    if not returns.empty:
+                    # CORRECCIÓN: Calcular retornos mensuales usando resample('ME').last().pct_change().dropna()
+                    # Esto asegura que se tome el último valor de cada mes para calcular el retorno mensual
+                    monthly_values = comb_series.resample('ME').last()
+                    monthly_returns = monthly_values.pct_change().dropna()
+                    if not monthly_returns.empty:
                         # Asegurarse de que el índice sea de tipo datetime
-                        returns.index = pd.to_datetime(returns.index)
-                        # Resamplear a fin de mes para asegurar consistencia
-                        returns = returns.resample('ME').last()
+                        monthly_returns.index = pd.to_datetime(monthly_returns.index)
                         # Crear un DataFrame con los retornos y una columna auxiliar para el año
-                        returns_df = pd.DataFrame({'Return': returns, 'Year': returns.index.year})
+                        returns_df = pd.DataFrame({'Return': monthly_returns, 'Year': monthly_returns.index.year})
                         # Agrupar por año
                         yearly_groups = returns_df.groupby('Year')
                         # Formatear para tabla
@@ -1612,6 +1693,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             # Crear un diccionario para acceder rápidamente a los retornos por mes
                             # Usamos el número del mes (1-12) como clave
                             monthly_returns_for_year = {row_index.month: row_data['Return'] for row_index, row_data in year_data.iterrows()}
+                            # Calcular el total anual sumando los retornos mensuales (+1)
+                            annual_return_total = 1.0
+                            for month in range(1, 13):
+                                if month in monthly_returns_for_year:
+                                    monthly_ret = monthly_returns_for_year[month]
+                                    annual_return_total *= (1 + monthly_ret)
+                            # Convertir el total acumulado a un retorno porcentual
+                            annual_return_percentage = (annual_return_total - 1) * 100
                             # Iterar sobre cada mes (1 a 12)
                             for month in range(1, 13):
                                 if month in monthly_returns_for_year:
@@ -1622,9 +1711,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                 else:
                                     # Si no hay dato para ese mes, dejar celda vacía
                                     row.append("")
+                            # Añadir el total anual al final de la fila
+                            row.append(f"{annual_return_percentage:+.1f}%")
                             table_data.append(row)
                         # Crear DataFrame para la tabla
-                        columns = ['Año'] + month_columns
+                        columns = ['Año'] + month_columns + ['Total Anual (%)']
                         df_table = pd.DataFrame(table_data, columns=columns)
                         # Aplicar estilos condicionales
                         def color_cells(val):
@@ -1710,14 +1801,15 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             st.subheader("📅 Retornos Mensuales por Año")
                             try:
                                 # Obtener retornos mensuales para esta estrategia
-                                returns = ser.pct_change().dropna()
-                                if not returns.empty:
+                                # CORRECCIÓN: Calcular retornos mensuales usando resample('ME').last().pct_change().dropna()
+                                # Esto asegura que se tome el último valor de cada mes para calcular el retorno mensual
+                                monthly_values = ser.resample('ME').last()
+                                monthly_returns = monthly_values.pct_change().dropna()
+                                if not monthly_returns.empty:
                                     # Asegurarse de que el índice sea de tipo datetime
-                                    returns.index = pd.to_datetime(returns.index)
-                                    # Resamplear a fin de mes para asegurar consistencia
-                                    returns = returns.resample('ME').last()
+                                    monthly_returns.index = pd.to_datetime(monthly_returns.index)
                                     # Crear un DataFrame con los retornos y una columna auxiliar para el año
-                                    returns_df = pd.DataFrame({'Return': returns, 'Year': returns.index.year})
+                                    returns_df = pd.DataFrame({'Return': monthly_returns, 'Year': monthly_returns.index.year})
                                     # Agrupar por año
                                     yearly_groups = returns_df.groupby('Year')
                                     # Formatear para tabla
@@ -1733,6 +1825,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                         # Crear un diccionario para acceder rápidamente a los retornos por mes
                                         # Usamos el número del mes (1-12) como clave
                                         monthly_returns_for_year = {row_index.month: row_data['Return'] for row_index, row_data in year_data.iterrows()}
+                                        # Calcular el total anual sumando los retornos mensuales (+1)
+                                        annual_return_total = 1.0
+                                        for month in range(1, 13):
+                                            if month in monthly_returns_for_year:
+                                                monthly_ret = monthly_returns_for_year[month]
+                                                annual_return_total *= (1 + monthly_ret)
+                                        # Convertir el total acumulado a un retorno porcentual
+                                        annual_return_percentage = (annual_return_total - 1) * 100
                                         # Iterar sobre cada mes (1 a 12)
                                         for month in range(1, 13):
                                             if month in monthly_returns_for_year:
@@ -1743,9 +1843,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                             else:
                                                 # Si no hay dato para ese mes, dejar celda vacía
                                                 row.append("")
+                                        # Añadir el total anual al final de la fila
+                                        row.append(f"{annual_return_percentage:+.1f}%")
                                         table_data.append(row)
                                     # Crear DataFrame para la tabla
-                                    columns = ['Año'] + month_columns
+                                    columns = ['Año'] + month_columns + ['Total Anual (%)']
                                     df_table = pd.DataFrame(table_data, columns=columns)
                                     # Aplicar estilos condicionales (misma función que antes)
                                     def color_cells(val):
@@ -1788,6 +1890,28 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             st.write("No hay datos disponibles para esta estrategia.")
                 except Exception as e:
                     st.error(f"❌ Error en pestaña {s}: {e}")
+            # ---- NUEVA PESTAÑA: LOG DE SEÑALES ----
+            with tabs[-1]: # Acceder a la última pestaña creada
+                st.header("📝 Log de Señales Mensuales")
+                # Mostrar log de señales para debugging
+                for s in active:
+                    st.subheader(f"**{s} - Señales Reales:**")
+                    if s in signals_log and signals_log[s]["real"]:
+                        signal_df = pd.DataFrame([
+                            {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}
+                            for sig in signals_log[s]["real"]
+                        ])
+                        st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
+                    else:
+                        st.write("No hay señales disponibles")
+                    st.subheader(f"**{s} - Señal Hipotética Actual:**")
+                    if s in signals_log and signals_log[s]["hypothetical"]:
+                        hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
+                        # Corrección: Convertir Timestamp a string si es necesario
+                        fecha_str = hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else str(hyp_signal[0])
+                        st.write(f"Fecha: {fecha_str}")
+                        st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
+                    st.markdown("---")
         except Exception as e:
             st.error(f"❌ Error mostrando resultados combinados: {e}")
 else:
