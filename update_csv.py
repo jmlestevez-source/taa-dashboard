@@ -9,8 +9,8 @@ TICKERS = [
     "LQD","HYG","IEF","BIL","SHY","MDY","IEV","EWJ","AGG"
 ]
 
-# Carpeta data en tu repo
-DATA_DIR = os.path.join("taa-dashboard", "data")
+# Carpeta data directamente en la raíz del repo
+DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
 
 for ticker in TICKERS:
