@@ -1779,28 +1779,3 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             st.error(f"❌ Error mostrando resultados combinados: {e}")
 else:
     st.info("👈 Configura y ejecuta")
-
-# Nueva pestaña para mostrar el log de señales
-try:
-    # Mostrar log de señales para debugging
-    st.subheader("📋 Log de Señales Mensuales (Debug)")
-    for s in active:
-        st.write(f"**{s} - Señales Reales:**")
-        if s in signals_log and signals_log[s]["real"]:
-            signal_df = pd.DataFrame([
-                {"Fecha": sig[0].strftime('%Y-%m-%d'), "Señal": str({k: f"{v*100:.3f}%" for k,v in sig[1].items()})}
-                for sig in signals_log[s]["real"]
-            ])
-            st.dataframe(signal_df.tail(10), use_container_width=True, hide_index=True)
-        else:
-            st.write("No hay señales disponibles")
-        st.write(f"**{s} - Señal Hipotética Actual:**")
-        if s in signals_log and signals_log[s]["hypothetical"]:
-            hyp_signal = signals_log[s]["hypothetical"][-1] if signals_log[s]["hypothetical"] else ("N/A", {})
-            # Corrección: Convertir Timestamp a string si es necesario
-            fecha_str = hyp_signal[0].strftime('%Y-%m-%d') if hasattr(hyp_signal[0], 'strftime') else str(hyp_signal[0])
-            st.write(f"Fecha: {fecha_str}")
-            st.write(f"Señal: { {k: f'{v*100:.3f}%' for k,v in hyp_signal[1].items()} }")
-        st.markdown("---")
-except Exception as e:
-    st.warning("No se pudo mostrar el log de señales: " + str(e))
