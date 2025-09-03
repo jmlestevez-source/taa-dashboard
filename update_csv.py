@@ -6,7 +6,7 @@ from datetime import datetime
 # Lista de tickers
 TICKERS = [
     "SPY","QQQ","IWM","EFA","EEM","VNQ","DBC","GLD","TLT","IYR",
-    "LQD","HYG","IEF","BIL","SHY","MDY","IEV","EWJ","AGG", "VTI"
+    "LQD","HYG","IEF","BIL","SHY","MDY","IEV","EWJ","AGG", "VTI","TIP"
 ]
 
 # Carpeta data directamente en la raíz del repo
