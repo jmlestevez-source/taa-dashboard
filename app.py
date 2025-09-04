@@ -1144,7 +1144,7 @@ def format_signal_for_display(signal_dict):
                  "Ticker": ticker,
                  "Peso (%)": f"{weight * 100:.3f}"
              })
-    if not formatted_data:
+    if not formatted_
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
 
@@ -1655,6 +1655,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                          sign = 1
                                      num = sign * float(num_str)
                                 else:
+                                     # MODIFICACIÓN: Multiplicar por 100 para que el valor decimal se interprete como porcentaje
                                      num = float(val) * 100 # pct_change devuelve floats, los multiplicamos por 100 para comparar
 
                                 if num > 0:
@@ -1808,6 +1809,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                                      sign = 1
                                                  num = sign * float(num_str)
                                             else:
+                                                 # MODIFICACIÓN: Multiplicar por 100 para que el valor decimal se interprete como porcentaje
                                                  num = float(val) * 100 # pct_change devuelve floats, los multiplicamos por 100 para comparar
 
                                             if num > 0:
@@ -1860,7 +1862,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             if weights: # Solo mostrar si hay pesos
                                 weights_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in weights.items()])
                                 real_df_data.append({"Fecha": date.strftime('%Y-%m-%d'), "Pesos": weights_str})
-                        if real_df_data:
+                        if real_df_
                             real_df = pd.DataFrame(real_df_data)
                             st.dataframe(real_df, use_container_width=True, hide_index=True)
                         else:
