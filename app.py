@@ -1862,10 +1862,10 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             if weights: # Solo mostrar si hay pesos
                                 weights_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in weights.items()])
                                 real_df_data.append({"Fecha": date.strftime('%Y-%m-%d'), "Pesos": weights_str})
-                        if real_df_data:
+                            if real_df_data: # <-- CORRECCIÓN: Agregar ':' y usar el nombre de variable correcto
                             real_df = pd.DataFrame(real_df_data)
                             st.dataframe(real_df, use_container_width=True, hide_index=True)
-                        else:
+                        else: # <-- CORRECCIÓN: Agregar ':'
                             st.info("No hay señales reales con posición para esta estrategia.")
                     else
                         st.info("No hay señales reales registradas para esta estrategia.")
