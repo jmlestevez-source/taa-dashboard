@@ -1380,12 +1380,26 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             dd_comb = (comb_series/comb_series.cummax()-1)*100
             dd_spy = (spy_series/spy_series.cummax()-1)*100
             fig_dd = go.Figure()
-            fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada",
-                                          line=dict(color='red', width=2),
-                                          fill='tonexty', fillcolor='rgba(255,0,0,0,0.1)'))
-            fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY",
-                                          line=dict(color='orange', width=2, dash="dot"),
-                                          fill='tonexty', fillcolor='rgba(255,165,0,0,0.1)'))
+            fig_dd.add_trace(
+    go.Scatter(
+        x=dd_comb.index,
+        y=dd_comb,
+        name="Combinada",
+        line=dict(color='red', width=2),
+        fill='tonexty',
+        fillcolor='rgba(255,0,0,0.1)'        # ← fixed
+    )
+)
+fig_dd.add_trace(
+    go.Scatter(
+        x=dd_spy.index,
+        y=dd_spy,
+        name="SPY",
+        line=dict(color='orange', width=2, dash="dot"),
+        fill='tonexty',
+        fillcolor='rgba(255,165,0,0.1)'      # ← fixed
+    )
+)
             fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
             st.plotly_chart(fig_dd, use_container_width=True)
             st.subheader("🔗 Correlaciones")
@@ -1446,12 +1460,26 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         st.subheader("📉 Drawdown")
                         dd_ind = (ser/ser.cummax()-1)*100
                         fig_dd = go.Figure()
-                        fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s,
-                                                      line=dict(color='red', width=2),
-                                                      fill='tonexty', fillcolor='rgba(255,0,0,0,0.1)'))
-                        fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY",
-                                                      line=dict(color='orange', width=2, dash="dot"),
-                                                      fill='tonexty', fillcolor='rgba(255,165,0,0,0.1)'))
+                        fig_dd.add_trace(
+    go.Scatter(
+        x=dd_ind.index,
+        y=dd_ind,
+        name=s,
+        line=dict(color='red', width=2),
+        fill='tonexty',
+        fillcolor='rgba(255,0,0,0.1)'        # ← fixed
+    )
+)
+fig_dd.add_trace(
+    go.Scatter(
+        x=dd_spy.index,
+        y=dd_spy,
+        name="SPY",
+        line=dict(color='orange', width=2, dash="dot"),
+        fill='tonexty',
+        fillcolor='rgba(255,165,0,0.1)'      # ← fixed
+    )
+)
                         fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
                         st.plotly_chart(fig_dd, use_container_width=True)
                         st.subheader("📅 Retornos Mensuales por Año (con YTD)")
