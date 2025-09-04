@@ -1457,19 +1457,21 @@ fig_dd.add_trace(
                         fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
                         fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
                         st.plotly_chart(fig, use_container_width=True)
-                        st.subheader("📉 Drawdown")
-                        dd_ind = (ser/ser.cummax()-1)*100
-                        fig_dd = go.Figure()
-                        fig_dd.add_trace(
+                       st.subheader("📉 Drawdown")
+dd_ind = (ser / ser.cummax() - 1) * 100
+fig_dd = go.Figure()
+
+fig_dd.add_trace(
     go.Scatter(
         x=dd_ind.index,
         y=dd_ind,
         name=s,
         line=dict(color='red', width=2),
         fill='tonexty',
-        fillcolor='rgba(255,0,0,0.1)'        # ← fixed
+        fillcolor='rgba(255,0,0,0.1)'
     )
 )
+
 fig_dd.add_trace(
     go.Scatter(
         x=dd_spy.index,
@@ -1477,29 +1479,28 @@ fig_dd.add_trace(
         name="SPY",
         line=dict(color='orange', width=2, dash="dot"),
         fill='tonexty',
-        fillcolor='rgba(255,165,0,0.1)'      # ← fixed
+        fillcolor='rgba(255,165,0,0.1)'
     )
 )
-                        fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
-                        st.plotly_chart(fig_dd, use_container_width=True)
-                        st.subheader("📅 Retornos Mensuales por Año (con YTD)")
-                        try:
-                            returns = None
-                            if s in ind_series:
-                                 returns = ind_series[s].pct_change().dropna()
-                            if returns is not None and not returns.empty:
-                                returns.index = pd.to_datetime(returns.index)
-                                monthly_table = build_monthly_returns_table(returns)
-                                st.dataframe(monthly_table.style.applymap(color_cells), use_container_width=True)
-                            else:
-                                st.info("No hay datos de retornos para mostrar.")
-                        except Exception as e:
-                            st.warning(f"No se pudo generar la tabla de retornos mensuales para {s}: {e}")
-                    else:
-                        st.write("No hay datos disponibles para esta estrategia.")
-            except Exception as e:
-                st.error(f"❌ Error en pestaña {s}: {e}")
-        with tabs[-1]:
+
+fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
+st.plotly_chart(fig_dd, use_container_width=True)
+
+st.subheader("📅 Retornos Mensuales por Año (con YTD)")
+try:
+    returns = None
+    if s in ind_series:
+        returns = ind_series[s].pct_change().dropna()
+    if returns is not None and not returns.empty:
+        returns.index = pd.to_datetime(returns.index)
+        monthly_table = build_monthly_returns_table(returns)
+        st.dataframe(monthly_table.style.applymap(color_cells), use_container_width=True)
+    else:
+        st.info("No hay datos de retornos para mostrar.")
+except Exception as e:
+    st.warning(f"No se pudo generar la tabla de retornos mensuales para {s}: {e}")
+else:
+    st.write("No hay datos disponibles para esta estrategia.")
             st.header("📝 Logs de Señales Históricas")
             st.write("Este apartado muestra el historial completo de señales reales.")
             for s in active:
