@@ -1844,39 +1844,40 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             # Opcional: Mostrar el traceback completo para depuración
                             # import traceback
                             # st.text(traceback.format_exc())
-                    else:
-                        st.write("No hay datos disponibles para esta estrategia.")
-            except Exception as e:
-                st.error(f"❌ Error en pestaña {s}: {e}")
-        
-        # <-- CAMBIO: Nueva pestaña para Logs de Señales
-        # ---- TAB FINAL: LOGS DE SEÑALES ----
-        with tabs[-1]: # Acceder a la última pestaña
-            st.header("📝 Logs de Señales Históricas")
-            st.write("Este apartado muestra el historial completo de señales reales.")
+                                            else:
+                            st.write("No hay datos disponibles para esta estrategia.")
+                except Exception as e:
+                    st.error(f"❌ Error en pestaña {s}: {e}")
             
-            for s in active:
-                st.subheader(f"Señales Reales para: {s}")
+            # <-- CAMBIO: Nueva pestaña para Logs de Señales
+            # ---- TAB FINAL: LOGS DE SEÑALES ----
+            with tabs[-1]: # Acceder a la última pestaña
+                st.header("📝 Logs de Señales Históricas")
+                st.write("Este apartado muestra el historial completo de señales reales.")
                 
-                # Señales Reales (Históricas completas)
-                real_signals = signals_log.get(s, {}).get("real", [])
-                if real_signals:
-                    real_df_data = []
-                    for date, weights in real_signals:
-                        if weights: # Solo mostrar si hay pesos
-                            weights_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in weights.items()])
-                            real_df_data.append({"Fecha": date.strftime('%Y-%m-%d'), "Pesos": weights_str})
-                    if real_df_data: # <-- CORRECCIÓN: verificar real_df_data
-                        real_df = pd.DataFrame(real_df_data)
-                        st.dataframe(real_df, use_container_width=True, hide_index=True)
+                for s in active:
+                    st.subheader(f"Señales Reales para: {s}")
+                    
+                    # Señales Reales (Históricas completas)
+                    real_signals = signals_log.get(s, {}).get("real", [])
+                    if real_signals:
+                        real_df_data = []
+                        for date, weights in real_signals:
+                            if weights: # Solo mostrar si hay pesos
+                                weights_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in weights.items()])
+                                real_df_data.append({"Fecha": date.strftime('%Y-%m-%d'), "Pesos": weights_str})
+                        # CORRECCIÓN DEL ERROR DE SINTAXIS: if real_df_ -> if real_df_data
+                        if real_df_data: 
+                            real_df = pd.DataFrame(real_df_data)
+                            st.dataframe(real_df, use_container_width=True, hide_index=True)
+                        else:
+                            st.info("No hay señales reales con posición para esta estrategia.")
                     else:
-                        st.info("No hay señales reales con posición para esta estrategia.")
-                else:
-                    st.info("No hay señales reales registradas para esta estrategia.")
+                        st.info("No hay señales reales registradas para esta estrategia.")
 
-                st.divider() # Línea divisoria entre estrategias
+                    st.divider() # Línea divisoria entre estrategias
 
-    except Exception as e:
-        st.error(f"❌ Error mostrando resultados combinados: {e}")
+        except Exception as e:
+            st.error(f"❌ Error mostrando resultados combinados: {e}")
 else:
     st.info("👈 Configura y ejecuta")
