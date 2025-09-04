@@ -1603,13 +1603,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         month_names = {i: f"{i:02d}" for i in range(1, 13)}
                         pivot_table.rename(columns=month_names, inplace=True)
 
-                        # Formatear meses como porcentaje
-                        for col in [f"{i:02d}" for i in range(1, 13)]:
-                        if col in df_table.columns:
-                        df_table[col] = df_table[col].apply(
-                        lambda x: f"{x*100:+.2f}%" if isinstance(x, (int, float)) and not pd.isna(x) else ""
-                        )
-
                         # Resetear índice para que 'Year' sea una columna
                         df_table = pivot_table.reset_index()
 
@@ -1762,13 +1755,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                     # month_names = {1: 'Ene', 2: 'Feb', ..., 12: 'Dic'} # Opcional
                                     month_names = {i: f"{i:02d}" for i in range(1, 13)}
                                     pivot_table.rename(columns=month_names, inplace=True)
-
-                                    # Formatear meses como porcentaje
-                                    for col in [f"{i:02d}" for i in range(1, 13)]:
-                                    if col in df_table.columns:
-                                    df_table[col] = df_table[col].apply(
-                                    lambda x: f"{x*100:+.2f}%" if isinstance(x, (int, float)) and not pd.isna(x) else ""
-                                    )
 
                                     # Resetear índice para que 'Year' sea una columna
                                     df_table = pivot_table.reset_index()
