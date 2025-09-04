@@ -22,23 +22,22 @@ end_date   = st.sidebar.date_input("Fecha de fin",   datetime.today())
 
 # Actualización: VGK -> IEV en todas las estrategias
 DAA_KELLER = {
-    "risky":   ['SPY','IWM','QQQ','IEV','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD'], # VGK -> IEV
+    "risky":   ['SPY','IWM','QQQ','IEV','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD'],
     "protect": ['SHY','IEF','LQD'],
     "canary":  ['EEM','AGG']
 }
 DUAL_ROC4 = {
-    "universe":['SPY','IWM','QQQ','IEV','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD','IEF'], # VGK -> IEV
+    "universe":['SPY','IWM','QQQ','IEV','EWJ','EEM','VNQ','DBC','GLD','TLT','HYG','LQD','IEF'],
     "fill":    ['IEF','TLT','SHY']
 }
 ACCEL_DUAL_MOM = {
-    "equity": ['SPY', 'IEV'], # VGK -> IEV
+    "equity": ['SPY', 'IEV'],
     "protective": ['TLT', 'IEF', 'SHY', 'TIP']
 }
 VAA_12 = {
-    "risky": ['SPY', 'IWM', 'QQQ', 'IEV', 'EWJ', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'LQD', 'HYG'], # VGK -> IEV
+    "risky": ['SPY', 'IWM', 'QQQ', 'IEV', 'EWJ', 'EEM', 'VNQ', 'DBC', 'GLD', 'TLT', 'LQD', 'HYG'],
     "safe": ['IEF', 'LQD', 'BIL']
 }
-# Nueva estrategia
 COMPOSITE_DUAL_MOM = {
     "slices": {
         "Equities": ['SPY', 'EFA'],
@@ -46,29 +45,25 @@ COMPOSITE_DUAL_MOM = {
         "Real_Estate": ['VNQ', 'IYR'],
         "Stress": ['GLD', 'TLT']
     },
-    "benchmark": 'BIL' # Activo de referencia para comparar rendimiento mínimo
+    "benchmark": 'BIL'
 }
-# Nueva estrategia
 QUINT_SWITCHING_FILTERED = {
     "risky": ['SPY', 'QQQ', 'EFA', 'EEM', 'TLT'],
     "defensive": ['IEF', 'BIL']
 }
-# Nueva estrategia
 BAA_AGGRESSIVE = {
     "offensive": ['QQQ', 'EEM', 'EFA', 'AGG'],
     "defensive": ['TIP', 'DBC', 'BIL', 'IEF', 'TLT', 'LQD', 'AGG'],
     "canary": ['SPY', 'EEM', 'EFA', 'AGG']
 }
-# Nueva estrategia
 SISTEMA_DESCORRELACION = {
     "main": ['VTI', 'GLD', 'TLT'],
     "secondary": ['SPY', 'QQQ', 'MDY', 'EFA']
 }
-# Nueva estrategia: HAA (Hybrid Adaptive Asset Allocation)
 HAA = {
     "offensive_universe": ['SPY', 'IWM', 'EFA', 'EEM', 'VNQ', 'DBC', 'IEF', 'TLT'],
     "canary": ['TIP'],
-    "cash_proxy_candidates": ['IEF', 'BIL'] # Para representar efectivo y alternativas defensivas
+    "cash_proxy_candidates": ['IEF', 'BIL']
 }
 
 ALL_STRATEGIES = {
@@ -80,7 +75,7 @@ ALL_STRATEGIES = {
     "Quint Switching Filtered": QUINT_SWITCHING_FILTERED,
     "BAA Aggressive": BAA_AGGRESSIVE,
     "Sistema Descorrelación": SISTEMA_DESCORRELACION,
-    "HAA": HAA # Añadida la nueva estrategia
+    "HAA": HAA
 }
 active = st.sidebar.multiselect("📊 Selecciona Estrategias", list(ALL_STRATEGIES.keys()), ["DAA KELLER"])
 
@@ -96,26 +91,21 @@ if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
 
 def get_cache_filename(ticker, start, end):
-    """Genera un nombre de archivo único para la caché basado en los parámetros"""
     key = f"{ticker}_{start}_{end}"
     hash_key = hashlib.md5(key.encode()).hexdigest()
     return os.path.join(CACHE_DIR, f"{hash_key}.pkl")
 
 def load_from_cache(ticker, start, end):
-    """Carga datos desde la caché si existen"""
     cache_file = get_cache_filename(ticker, start, end)
     if os.path.exists(cache_file):
         try:
             with open(cache_file, 'rb') as f:
-                data = pickle.load(f)
-                # st.write(f"✅ {ticker} cargado desde caché") # Ocultar log
-                return data
+                return pickle.load(f)
         except Exception as e:
             st.warning(f"⚠️ Error cargando {ticker} desde caché: {e}")
     return None
 
 def save_to_cache(ticker, start, end, data):
-    """Guarda datos en la caché"""
     cache_file = get_cache_filename(ticker, start, end)
     try:
         with open(cache_file, 'wb') as f:
@@ -124,19 +114,16 @@ def save_to_cache(ticker, start, end, data):
         st.warning(f"⚠️ Error guardando {ticker} en caché: {e}")
 
 def get_available_fmp_key():
-    """Obtiene una API key disponible que no haya alcanzado el límite"""
     available_keys = [key for key in FMP_KEYS if FMP_CALLS[key] < FMP_LIMIT_PER_DAY]
     if available_keys:
         return random.choice(available_keys)
     st.warning("⚠️ Todas las API keys de FMP han alcanzado el límite diario.")
     return min(FMP_KEYS, key=lambda k: FMP_CALLS[k])
 
-# ------------- DESCARGA (Solo CSV desde GitHub + FMP) -------------
-# Variable global para rastrear errores durante la descarga
+# ------------- DESCARGA -------------
 _DOWNLOAD_ERRORS_OCCURRED = False
 
 def should_use_fmp(csv_df, days_threshold=7):
-    """Verifica si es necesario usar FMP basado en la frescura de los datos CSV"""
     if csv_df.empty:
         return True
     last_csv_date = csv_df.index.max()
@@ -146,22 +133,18 @@ def should_use_fmp(csv_df, days_threshold=7):
     return True
 
 def load_historical_data_from_csv(ticker):
-    """Carga datos históricos desde CSV en GitHub"""
     try:
         base_url = "https://raw.githubusercontent.com/jmlestevez-source/taa-dashboard/main/data/"
         csv_url = f"{base_url}{ticker}.csv"
-        # st.write(f"📥 Cargando datos históricos de {ticker} desde CSV...") # Ocultar log
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(csv_url, headers=headers, timeout=30)
         if response.status_code == 200:
             csv_content = response.content.decode('utf-8')
-            lines = csv_content.strip().split('\n') # Corregido el salto de línea
+            lines = csv_content.strip().split('\n')
             if len(lines) < 4:
-                st.error(f"❌ CSV de {ticker} tiene muy pocas líneas")
                 return pd.DataFrame()
             data_lines = lines[3:]
-            dates = []
-            close_prices = []
+            dates, close_prices = [], []
             for line in data_lines:
                 if line.strip():
                     parts = line.split(',')
@@ -171,26 +154,18 @@ def load_historical_data_from_csv(ticker):
                             close_price = pd.to_numeric(parts[1], errors='coerce')
                             dates.append(date)
                             close_prices.append(close_price)
-                        except Exception as e:
-                            # st.warning(f"⚠️ Error parseando línea: {line[:50]}...") # Ocultar log
+                        except:
                             continue
             if dates and close_prices:
                 df = pd.DataFrame({ticker: close_prices}, index=dates)
                 df.index = pd.to_datetime(df.index)
-                # st.write(f"✅ {ticker} cargado desde CSV - {len(df)} registros") # Ocultar log
                 return df
-            else:
-                st.error(f"❌ No se pudieron parsear datos de {ticker}.csv")
-                return pd.DataFrame()
-        else:
-            st.error(f"❌ Error HTTP {response.status_code} cargando {ticker} desde CSV")
-            return pd.DataFrame()
+        return pd.DataFrame()
     except Exception as e:
         st.error(f"❌ Error cargando {ticker} desde CSV: {str(e)}")
         return pd.DataFrame()
 
 def get_fmp_data(ticker, days=365*10):
-    """Obtiene datos históricos completos de FMP"""
     global _DOWNLOAD_ERRORS_OCCURRED
     try:
         api_key = get_available_fmp_key()
@@ -203,31 +178,19 @@ def get_fmp_data(ticker, days=365*10):
             if 'historical' in data and data['historical']:
                 df = pd.DataFrame(data['historical'])
                 df['date'] = pd.to_datetime(df['date'])
-                df = df.set_index('date')
-                df = df[['close']].rename(columns={'close': ticker})
+                df = df.set_index('date')[['close']].rename(columns={'close': ticker})
                 df[ticker] = pd.to_numeric(df[ticker], errors='coerce')
-                # st.write(f"✅ {ticker} datos históricos completos de FMP - {len(df)} registros") # Ocultar log
                 return df
-            else:
-                st.warning(f"⚠️ Datos vacíos de FMP para {ticker}")
-                _DOWNLOAD_ERRORS_OCCURRED = True
-                return pd.DataFrame()
         elif response.status_code == 403:
-            # st.warning(f"⚠️ Error HTTP 403 (acceso denegado) obteniendo datos de FMP para {ticker}") # <-- CAMBIO: Comentado
-            # No incrementar FMP_CALLS ni _DOWNLOAD_ERRORS_OCCURRED para 403
-            # Esto evita mostrar advertencias si el CSV funciona
-            return pd.DataFrame() # <-- CAMBIO: Devolver DataFrame vacío para permitir fallback
+            return pd.DataFrame()
         else:
-            st.warning(f"⚠️ Error HTTP {response.status_code} obteniendo datos de FMP para {ticker}")
             _DOWNLOAD_ERRORS_OCCURRED = True
             return pd.DataFrame()
     except Exception as e:
-        st.error(f"❌ Error obteniendo datos de FMP para {ticker}: {e}")
         _DOWNLOAD_ERRORS_OCCURRED = True
         return pd.DataFrame()
 
 def append_csv_historical_data(fmp_df, ticker):
-    """Añade datos históricos del CSV que estén antes del rango de FMP"""
     global _DOWNLOAD_ERRORS_OCCURRED
     try:
         csv_df = load_historical_data_from_csv(ticker)
@@ -235,103 +198,51 @@ def append_csv_historical_data(fmp_df, ticker):
             fmp_min_date = fmp_df.index.min()
             csv_older_data = csv_df[csv_df.index < fmp_min_date]
             if not csv_older_data.empty:
-                # st.write(f"🔄 Añadiendo {len(csv_older_data)} registros históricos de CSV para {ticker} (anteriores a {fmp_min_date.strftime('%Y-%m-%d')})") # Ocultar log
                 combined_df = pd.concat([csv_older_data, fmp_df])
                 combined_df = combined_df[~combined_df.index.duplicated(keep='last')].sort_index()
                 return combined_df
-            else:
-                # st.write(f"ℹ️ No hay datos históricos adicionales en CSV para {ticker}") # Ocultar log
-                return fmp_df
-        else:
-            return fmp_df
+        return fmp_df
     except Exception as e:
-        st.warning(f"⚠️ Error añadiendo datos históricos de CSV para {ticker}: {e}")
         return fmp_df
 
 def download_ticker_data(ticker, start, end):
-    """Descarga datos combinando FMP (primero) + CSV (fallback) + datos históricos CSV adicionales"""
     global _DOWNLOAD_ERRORS_OCCURRED
     cached_data = load_from_cache(ticker, start, end)
     if cached_data is not None:
         return cached_data
     try:
-        # st.write(f"🔄 Intentando descargar datos de FMP para {ticker}...") # Ocultar log
         fmp_df = get_fmp_data(ticker, days=365*10)
         if not fmp_df.empty:
-            # st.write(f"✅ Datos de FMP obtenidos para {ticker}") # Ocultar log
             fmp_df = append_csv_historical_data(fmp_df, ticker)
             fmp_df_filtered = fmp_df[(fmp_df.index >= pd.Timestamp(start)) & (fmp_df.index <= pd.Timestamp(end))]
             if not fmp_df_filtered.empty:
                 monthly_df = fmp_df_filtered.resample('ME').last()
                 save_to_cache(ticker, start, end, monthly_df)
                 return monthly_df
-            else:
-                st.warning(f"⚠️ Datos de FMP para {ticker} fuera del rango de fechas")
-                _DOWNLOAD_ERRORS_OCCURRED = True
-        else:
-            # Solo mostrar advertencia si FMP falla Y el CSV también falla o no tiene datos suficientes
-            # st.warning(f"⚠️ No se pudieron obtener datos de FMP para {ticker}") # <-- CAMBIO: Comentado
-            _DOWNLOAD_ERRORS_OCCURRED = True # <-- CAMBIO: Marcar error si FMP falla (aunque CSV puede compensar)
-
-        # st.write(f"🔄 Cargando datos de CSV como fallback para {ticker}...") # Ocultar log
         csv_df = load_historical_data_from_csv(ticker)
         if not csv_df.empty:
-            recent_df = pd.DataFrame()
-            if should_use_fmp(csv_df):
-                # st.write(f"🔄 Obteniendo datos recientes de FMP para {ticker}...") # Ocultar log
-                recent_df = get_fmp_data(ticker, days=35)
-            else:
-                # st.write(f"✅ Datos CSV de {ticker} son recientes, no se necesita FMP adicional.") # Ocultar log
-                combined_df = csv_df # Corrección de indentación
-            if not recent_df.empty:
-                combined_df = pd.concat([csv_df, recent_df])
-                combined_df = combined_df[~combined_df.index.duplicated(keep='last')]
-                combined_df = combined_df.sort_index()
-            else:
-                combined_df = csv_df
-            combined_df = combined_df[(combined_df.index >= pd.Timestamp(start)) & (combined_df.index <= pd.Timestamp(end))]
-            if not combined_df.empty:
-                monthly_df = combined_df.resample('ME').last()
+            csv_df_filtered = csv_df[(csv_df.index >= pd.Timestamp(start)) & (csv_df.index <= pd.Timestamp(end))]
+            if not csv_df_filtered.empty:
+                monthly_df = csv_df_filtered.resample('ME').last()
                 save_to_cache(ticker, start, end, monthly_df)
                 return monthly_df
-            else:
-                st.warning(f"⚠️ No hay datos disponibles en el rango para {ticker} (desde CSV)")
-                _DOWNLOAD_ERRORS_OCCURRED = True
-        else:
-            st.error(f"❌ No se pudieron cargar datos de CSV para {ticker}")
-            _DOWNLOAD_ERRORS_OCCURRED = True
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"❌ Error procesando {ticker}: {e}")
-        _DOWNLOAD_ERRORS_OCCURRED = True
-        try:
-            csv_df = load_historical_data_from_csv(ticker)
-            if not csv_df.empty:
-                csv_df_filtered = csv_df[(csv_df.index >= pd.Timestamp(start)) & (csv_df.index <= pd.Timestamp(end))]
-                if not csv_df_filtered.empty:
-                    monthly_df = csv_df_filtered.resample('ME').last()
-                    return monthly_df
-        except:
-            pass
-    return pd.DataFrame()
+        return pd.DataFrame()
 
 @st.cache_data(show_spinner=False)
 def download_all_data(tickers, start, end):
     global _DOWNLOAD_ERRORS_OCCURRED
-    _DOWNLOAD_ERRORS_OCCURRED = False  # Reiniciar el indicador de errores al inicio
-    # st.info("📥 Descargando datos...") # Ocultar log
+    _DOWNLOAD_ERRORS_OCCURRED = False
     data, bar = {}, st.progress(0)
     total_tickers = len(tickers)
     for idx, tk in enumerate(tickers):
-        try:
-            bar.progress((idx + 1) / total_tickers)
-            df = download_ticker_data(tk, start, end)
-            if not df.empty and len(df) > 0:
-                data[tk] = df
-            else:
-                st.warning(f"⚠️ {tk} no disponible")
-                _DOWNLOAD_ERRORS_OCCURRED = True
-        except Exception as e:
-            st.error(f"❌ Error procesando {tk}: {e}")
+        bar.progress((idx + 1) / total_tickers)
+        df = download_ticker_data(tk, start, end)
+        if not df.empty:
+            data[tk] = df
+        else:
+            st.warning(f"⚠️ {tk} no disponible")
             _DOWNLOAD_ERRORS_OCCURRED = True
     bar.empty()
     return data
@@ -339,28 +250,19 @@ def download_all_data(tickers, start, end):
 def clean_and_align(data_dict):
     global _DOWNLOAD_ERRORS_OCCURRED
     if not data_dict:
-        st.error("❌ No hay datos para procesar")
         _DOWNLOAD_ERRORS_OCCURRED = True
         return pd.DataFrame()
     try:
         df = pd.concat(data_dict.values(), axis=1)
-        if df.empty:
-            st.error("❌ DataFrame concatenado vacío")
-            _DOWNLOAD_ERRORS_OCCURRED = True
-            return pd.DataFrame()
-        df = df.dropna(axis=1, how='all')
-        df = df.ffill().bfill()
-        df = df.dropna(how='all')
+        df = df.dropna(axis=1, how='all').ffill().bfill().dropna(how='all')
         return df
     except Exception as e:
-        st.error(f"❌ Error alineando datos: {e}")
         _DOWNLOAD_ERRORS_OCCURRED = True
         return pd.DataFrame()
 
 # ------------- UTILS -------------
 def momentum_score_keller(df, symbol):
-    """Momentum score para DAA Keller, VAA-12"""
-    if len(df) < 13:
+    if len(df) < 13 or symbol not in df.columns:
         return 0
     try:
         p0, p1 = df[symbol].iloc[-1], df[symbol].iloc[-2]
@@ -368,27 +270,18 @@ def momentum_score_keller(df, symbol):
         p6 = df[symbol].iloc[-7]
         p12 = df[symbol].iloc[-13]
         return 12*(p0/p1) + 4*(p0/p3) + 2*(p0/p6) + (p0/p12) - 19
-    except Exception:
+    except:
         return 0
 
 def momentum_score_roc4(df, symbol):
-    """Momentum score para Dual Momentum ROC4"""
-    if len(df) < 5:
-        return 0
-    if symbol not in df.columns:
-        return 0
-    if df[symbol].iloc[-5] == 0 or pd.isna(df[symbol].iloc[-5]):
-        return 0
-    if df[symbol].iloc[-5] <= 0:
+    if len(df) < 5 or symbol not in df.columns or df[symbol].iloc[-5] <= 0:
         return 0
     try:
-        result = (df[symbol].iloc[-1] / df[symbol].iloc[-5]) - 1
-        return result
-    except Exception:
+        return (df[symbol].iloc[-1] / df[symbol].iloc[-5]) - 1
+    except:
         return 0
 
 def momentum_score_accel_dual_mom(df, symbol):
-    """Calcula el ROC promedio de 1, 3 y 6 meses para Accelerated Dual Momentum"""
     if len(df) < 7:
         return 0
     try:
@@ -402,11 +295,10 @@ def momentum_score_accel_dual_mom(df, symbol):
         roc_3 = (p0 / p3) - 1
         roc_6 = (p0 / p6) - 1
         return (roc_1 + roc_3 + roc_6) / 3
-    except Exception:
+    except:
         return 0
 
 def roc_12(df, symbol):
-    """Calcula el retorno de 12 meses para Composite Dual Momentum"""
     if len(df) < 13:
         return float('-inf')
     try:
@@ -415,11 +307,10 @@ def roc_12(df, symbol):
         if p12 <= 0:
             return float('-inf')
         return (p0 / p12) - 1
-    except Exception:
+    except:
         return float('-inf')
 
 def roc_3(df, symbol):
-    """Calcula el retorno de 3 meses para Quint Switching Filtered"""
     if len(df) < 4:
         return float('-inf')
     try:
@@ -428,11 +319,10 @@ def roc_3(df, symbol):
         if p3 <= 0:
             return float('-inf')
         return (p0 / p3) - 1
-    except Exception:
+    except:
         return float('-inf')
 
 def roc_6(df, symbol):
-    """Calcula el ROC de 6 meses para Sistema Descorrelación"""
     if len(df) < 7:
         return float('-inf')
     try:
@@ -441,11 +331,10 @@ def roc_6(df, symbol):
         if p6 <= 0:
             return float('-inf')
         return (p0 / p6) - 1
-    except Exception:
+    except:
         return float('-inf')
 
 def sma_12(df, symbol):
-    """Calcula la media móvil simple de 12 meses"""
     if len(df) < 12:
         return 0
     try:
@@ -453,11 +342,10 @@ def sma_12(df, symbol):
         if prices.isnull().any() or (prices <= 0).any():
             return 0
         return prices.mean()
-    except Exception:
+    except:
         return 0
 
 def momentum_score_13612w(df, symbol):
-    """Calcula el momentum score 13612W"""
     if len(df) < 13:
         return 0
     try:
@@ -473,30 +361,26 @@ def momentum_score_13612w(df, symbol):
         roc_6 = (p0 / p6) - 1
         roc_12 = (p0 / p12) - 1
         return 12 * roc_1 + 4 * roc_3 + 2 * roc_6 + 1 * roc_12
-    except Exception:
+    except:
         return 0
 
-# Nueva función auxiliar para HAA
 def haa_momentum_score(df, symbol):
-    """Calcula el momentum score HAA: media no ponderada de ROC_1M, ROC_3M, ROC_6M, ROC_12M"""
-    if len(df) < 13: # Necesita al menos 13 meses para ROC_12M
+    if len(df) < 13:
         return float('-inf')
     try:
-        p0 = df[symbol].iloc[-1]   # Precio actual
-        p1 = df[symbol].iloc[-2]   # Hace 1 mes
-        p3 = df[symbol].iloc[-4]   # Hace 3 meses
-        p6 = df[symbol].iloc[-7]   # Hace 6 meses
-        p12 = df[symbol].iloc[-13] # Hace 12 meses
+        p0 = df[symbol].iloc[-1]
+        p1 = df[symbol].iloc[-2]
+        p3 = df[symbol].iloc[-4]
+        p6 = df[symbol].iloc[-7]
+        p12 = df[symbol].iloc[-13]
         if p1 <= 0 or p3 <= 0 or p6 <= 0 or p12 <= 0:
             return float('-inf')
         roc_1 = (p0 / p1) - 1
         roc_3 = (p0 / p3) - 1
         roc_6 = (p0 / p6) - 1
         roc_12 = (p0 / p12) - 1
-        # Media no ponderada
-        score = (roc_1 + roc_3 + roc_6 + roc_12) / 4
-        return score
-    except Exception:
+        return (roc_1 + roc_3 + roc_6 + roc_12) / 4
+    except:
         return float('-inf')
 
 def calc_metrics(rets):
@@ -510,22 +394,56 @@ def calc_metrics(rets):
             cagr = 0
         else:
             cagr = eq.iloc[-1] ** (1 / yrs) - 1
-        if len(eq) == 0 or eq.cummax().iloc[-1] == 0:
-            dd = 0
-        else:
-            dd_series = (eq / eq.cummax()) - 1
-            dd = dd_series.min()
+        dd_series = (eq / eq.cummax()) - 1
+        dd = dd_series.min()
         sharpe = (rets.mean() / rets.std()) * np.sqrt(12) if rets.std() != 0 else 0
         vol = rets.std() * np.sqrt(12)
         return {"CAGR": round(cagr * 100, 2), "MaxDD": round(dd * 100, 2),
                 "Sharpe": round(sharpe, 2), "Vol": round(vol * 100, 2)}
     except Exception as e:
-        st.error(f"Error calculando métricas: {e}")
         return {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
+
+# -----------------------------------------------------------
+#  NEW  –  monthly returns + YTD  (works for ANY equity curve)
+# -----------------------------------------------------------
+def build_monthly_returns_table(equity_series: pd.Series) -> pd.DataFrame:
+    """
+    Devuelve DataFrame listo para mostrar:
+    filas  = años
+    cols   = 01 02 … 12  YTD
+    valores= strings tipo  +3.45 %  (ya multiplicado ×100)
+    """
+    if equity_series.empty:
+        return pd.DataFrame()
+
+    # 1.  retornos mensuales (fin de mes) ya en %
+    monthly_rets = equity_series.resample('M').last().pct_change().dropna() * 100
+
+    # 2.  armamos tabla pivot
+    df_rets = monthly_rets.to_frame('ret')
+    df_rets['Year']  = df_rets.index.year
+    df_rets['Month'] = df_rets.index.month
+    pivot = df_rets.pivot(index='Year', columns='Month', values='ret')
+    pivot = pivot.fillna('')                       # celdas vacías → ''
+    pivot.rename(columns=lambda m: f'{m:02d}', inplace=True)
+
+    # 3.  YTD = (último precio año / 1º precio año) -1
+    ytd_s = (equity_series.groupby(equity_series.index.year)
+                          .apply(lambda x: (x.iloc[-1] / x.iloc[0] - 1) * 100)
+                          .rename('YTD'))
+
+    # 4.  unimos YTD y reseteamos índice
+    pivot = pivot.join(ytd_s).reset_index()
+
+    # 5.  formateamos todas las columnas numéricas → string con %
+    cols_numeric = [c for c in pivot.columns if c != 'Year']
+    pivot[cols_numeric] = pivot[cols_numeric].apply(
+        lambda s: s.map(lambda v: f'{v:+.2f} %' if isinstance(v, (int, float)) else v)
+    )
+    return pivot
 
 # ------------- MOTORES -------------
 def weights_daa(df, risky, protect, canary):
-    """Calcula señales para DAA Keller - LÓGICA CORREGIDA"""
     if len(df) < 13:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
@@ -583,7 +501,6 @@ def weights_daa(df, risky, protect, canary):
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_roc4(df, universe, fill):
-    """Calcula señales para Dual Momentum ROC4 - LÓGICA CORREGIDA"""
     if len(df) < 6:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
@@ -630,7 +547,6 @@ def weights_roc4(df, universe, fill):
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_accel_dual_mom(df, equity, protective):
-    """Calcula señales para Accelerated Dual Momentum"""
     if len(df) < 7:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
@@ -704,7 +620,6 @@ def weights_accel_dual_mom(df, equity, protective):
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_vaa_12(df, risky, safe):
-    """Calcula señales para VAA-12"""
     if len(df) < 13:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
@@ -774,7 +689,6 @@ def weights_vaa_12(df, risky, safe):
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_composite_dual_mom(df, slices, benchmark):
-    """Calcula señales para Composite Dual Momentum"""
     if len(df) < 13:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
@@ -826,7 +740,6 @@ def weights_composite_dual_mom(df, slices, benchmark):
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_quint_switching_filtered(df, risky, defensive):
-    """Calcula señales para Quint Switching Filtered"""
     if len(df) < 4:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
@@ -870,7 +783,6 @@ def weights_quint_switching_filtered(df, risky, defensive):
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_baa_aggressive(df, offensive, defensive, canary):
-    """Calcula señales para BAA Aggressive - LÓGICA CORREGIDA"""
     if len(df) < 13:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
@@ -964,7 +876,6 @@ def weights_baa_aggressive(df, offensive, defensive, canary):
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def weights_sistema_descorrelacion(df, main, secondary):
-    """Calcula señales para Sistema Descorrelación"""
     if len(df) < 7:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
@@ -977,20 +888,17 @@ def weights_sistema_descorrelacion(df, main, secondary):
             weights = {}
             if 'VTI' not in top_2_main_tickers:
                 for ticker, roc_val in top_2_main:
-                    if roc_val > 0: # Solo asignar peso si el ROC es positivo
+                    if roc_val > 0:
                         weights[ticker] = 0.5
             else:
                 other_main_ticker = next((t for t in top_2_main_tickers if t != 'VTI'), None)
                 secondary_roc = {s: roc_6(df_subset, s) for s in secondary if s in df_subset.columns}
                 top_2_secondary = sorted(secondary_roc.items(), key=lambda item: item[1], reverse=True)[:2]
-                # Asignar peso al otro activo principal si tiene ROC positivo
                 if other_main_ticker and main_roc.get(other_main_ticker, float('-inf')) > 0:
                     weights[other_main_ticker] = 0.5
-                # Asignar pesos a los activos secundarios si tienen ROC positivo
                 for ticker, roc_val in top_2_secondary:
-                    if roc_val > 0: # Solo asignar peso si el ROC es positivo
+                    if roc_val > 0:
                         weights[ticker] = weights.get(ticker, 0) + 0.25
-            # Si no hay activos con ROC positivo, weights queda vacío (cartera sin posición)
             sig.append((df.index[i-1], weights))
         except Exception as e:
             sig.append((df.index[i-1] if i > 0 and len(df) > 0 else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
@@ -1003,147 +911,100 @@ def weights_sistema_descorrelacion(df, main, secondary):
             weights = {}
             if 'VTI' not in top_2_main_tickers:
                 for ticker, roc_val in top_2_main:
-                    if roc_val > 0: # Solo asignar peso si el ROC es positivo
+                    if roc_val > 0:
                         weights[ticker] = 0.5
             else:
                 other_main_ticker = next((t for t in top_2_main_tickers if t != 'VTI'), None)
                 secondary_roc = {s: roc_6(df_subset, s) for s in secondary if s in df_subset.columns}
                 top_2_secondary = sorted(secondary_roc.items(), key=lambda item: item[1], reverse=True)[:2]
-                # Asignar peso al otro activo principal si tiene ROC positivo
                 if other_main_ticker and main_roc.get(other_main_ticker, float('-inf')) > 0:
                     weights[other_main_ticker] = 0.5
-                # Asignar pesos a los activos secundarios si tienen ROC positivo
                 for ticker, roc_val in top_2_secondary:
-                    if roc_val > 0: # Solo asignar peso si el ROC es positivo
+                    if roc_val > 0:
                         weights[ticker] = weights.get(ticker, 0) + 0.25
-            # Si no hay activos con ROC positivo, weights queda vacío (cartera sin posición)
             sig.append((df.index[-1], weights))
         except Exception as e:
             sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
     sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
-# Nueva función para HAA
 def weights_haa(df, offensive_universe, canary, cash_proxy_candidates):
-    """Calcula señales para HAA (Hybrid Adaptive Asset Allocation)"""
     if len(df) < 13:
         return [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
     sig = []
     for i in range(13, len(df)):
         try:
             df_subset = df.iloc[:i]
-            # Etapa 1: Evaluar el canario TIPS
-            if canary and len(canary) > 0:
-                tip_symbol = canary[0] # Asumimos que el primer elemento es TIP
-                if tip_symbol in df_subset.columns:
-                    tip_momentum = haa_momentum_score(df_subset, tip_symbol)
-                else:
-                    # Si no hay datos de TIP, asumimos mercado normal
-                    tip_momentum = 0
-            else:
-                tip_momentum = 0 # Fallback
+            tip_symbol = canary[0] if canary and len(canary) > 0 else 'TIP'
+            tip_momentum = haa_momentum_score(df_subset, tip_symbol) if tip_symbol in df_subset.columns else 0
             w = {}
-            if tip_momentum > 0: # Etapa 2a: Modo Ofensivo
-                # Calcular momentum para el universo ofensivo
+            if tip_momentum > 0:
                 offensive_momentum = {s: haa_momentum_score(df_subset, s) for s in offensive_universe if s in df_subset.columns}
-                # Filtrar scores válidos
                 valid_offensive_momentum = {k: v for k, v in offensive_momentum.items() if not np.isinf(v) and not np.isnan(v)}
                 if len(valid_offensive_momentum) >= 4:
-                    # Seleccionar los 4 con mejor momentum
                     top_4_offensive = sorted(valid_offensive_momentum.items(), key=lambda item: item[1], reverse=True)[:4]
-                    # Asignar 25% a cada uno si su momentum es positivo, sino ir a efectivo
-                    # Determinar el mejor proxy de efectivo
                     cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
                     valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
-                    if valid_cash_proxy_momentum:
-                        best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
-                    else:
-                        best_cash_proxy = 'BIL' # Default
+                    best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get) if valid_cash_proxy_momentum else 'BIL'
                     for asset, momentum_score in top_4_offensive:
                         if momentum_score > 0:
                             w[asset] = w.get(asset, 0) + 0.25
                         else:
-                            # Si el momentum es negativo, asignar a efectivo
                             w[best_cash_proxy] = w.get(best_cash_proxy, 0) + 0.25
-                # Si hay menos de 4 activos válidos, se podría manejar de otra forma,
-                # pero por simplicidad dejamos la cartera vacía o con efectivo.
-            else: # Etapa 2b: Modo Defensivo
-                # Asignar 100% al mejor activo entre los candidatos a efectivo
+            else:
                 cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
                 valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
                 if valid_cash_proxy_momentum:
                     best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
                     w[best_cash_proxy] = 1.0
                 else:
-                    # Si no hay proxies de efectivo válidos, asignar a BIL por defecto
                     w['BIL'] = 1.0
             sig.append((df.index[i], w))
         except Exception as e:
             sig.append((df.index[i] if i < len(df) else (df.index[-1] if len(df) > 0 else pd.Timestamp.now()), {}))
-    # Señal para el último periodo
     if len(df) >= 13:
-         try:
-             df_subset = df
-             # Etapa 1: Evaluar el canario TIPS
-             if canary and len(canary) > 0:
-                 tip_symbol = canary[0] # Asumimos que el primer elemento es TIP
-                 if tip_symbol in df_subset.columns:
-                     tip_momentum = haa_momentum_score(df_subset, tip_symbol)
-                 else:
-                     # Si no hay datos de TIP, asumimos mercado normal
-                     tip_momentum = 0
-             else:
-                 tip_momentum = 0 # Fallback
-             w = {}
-             if tip_momentum > 0: # Etapa 2a: Modo Ofensivo
-                 # Calcular momentum para el universo ofensivo
-                 offensive_momentum = {s: haa_momentum_score(df_subset, s) for s in offensive_universe if s in df_subset.columns}
-                 # Filtrar scores válidos
-                 valid_offensive_momentum = {k: v for k, v in offensive_momentum.items() if not np.isinf(v) and not np.isnan(v)}
-                 if len(valid_offensive_momentum) >= 4:
-                     # Seleccionar los 4 con mejor momentum
-                     top_4_offensive = sorted(valid_offensive_momentum.items(), key=lambda item: item[1], reverse=True)[:4]
-                     # Asignar 25% a cada uno si su momentum es positivo, sino ir a efectivo
-                     # Determinar el mejor proxy de efectivo
-                     cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
-                     valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
-                     if valid_cash_proxy_momentum:
-                         best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
-                     else:
-                         best_cash_proxy = 'BIL' # Default
-                     for asset, momentum_score in top_4_offensive:
-                         if momentum_score > 0:
-                             w[asset] = w.get(asset, 0) + 0.25
-                         else:
-                             # Si el momentum es negativo, asignar a efectivo
-                             w[best_cash_proxy] = w.get(best_cash_proxy, 0) + 0.25
-             else: # Etapa 2b: Modo Defensivo
-                 # Asignar 100% al mejor activo entre los candidatos a efectivo
-                 cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
-                 valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
-                 if valid_cash_proxy_momentum:
-                     best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
-                     w[best_cash_proxy] = 1.0
-                 else:
-                     # Si no hay proxies de efectivo válidos, asignar a BIL por defecto
-                     w['BIL'] = 1.0
-             sig.append((df.index[-1], w))
-         except Exception as e:
-             sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
-    sig = list({s[0]: s for s in sig}.values()) # Eliminar duplicados
+        try:
+            df_subset = df
+            tip_symbol = canary[0] if canary and len(canary) > 0 else 'TIP'
+            tip_momentum = haa_momentum_score(df_subset, tip_symbol) if tip_symbol in df_subset.columns else 0
+            w = {}
+            if tip_momentum > 0:
+                offensive_momentum = {s: haa_momentum_score(df_subset, s) for s in offensive_universe if s in df_subset.columns}
+                valid_offensive_momentum = {k: v for k, v in offensive_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                if len(valid_offensive_momentum) >= 4:
+                    top_4_offensive = sorted(valid_offensive_momentum.items(), key=lambda item: item[1], reverse=True)[:4]
+                    cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
+                    valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                    best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get) if valid_cash_proxy_momentum else 'BIL'
+                    for asset, momentum_score in top_4_offensive:
+                        if momentum_score > 0:
+                            w[asset] = w.get(asset, 0) + 0.25
+                        else:
+                            w[best_cash_proxy] = w.get(best_cash_proxy, 0) + 0.25
+            else:
+                cash_proxy_momentum = {s: haa_momentum_score(df_subset, s) for s in cash_proxy_candidates if s in df_subset.columns}
+                valid_cash_proxy_momentum = {k: v for k, v in cash_proxy_momentum.items() if not np.isinf(v) and not np.isnan(v)}
+                if valid_cash_proxy_momentum:
+                    best_cash_proxy = max(valid_cash_proxy_momentum, key=valid_cash_proxy_momentum.get)
+                    w[best_cash_proxy] = 1.0
+                else:
+                    w['BIL'] = 1.0
+            sig.append((df.index[-1], w))
+        except Exception as e:
+            sig.append((df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {}))
+    sig = list({s[0]: s for s in sig}.values())
     return sig if sig else [(df.index[-1] if len(df) > 0 else pd.Timestamp.now(), {})]
 
 def format_signal_for_display(signal_dict):
-    """Formatea un diccionario de señal para mostrarlo como tabla"""
     if not signal_dict:
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     formatted_data = []
     for ticker, weight in signal_dict.items():
         if weight != 0:
-             formatted_data.append({
-                 "Ticker": ticker,
-                 "Peso (%)": f"{weight * 100:.3f}"
-             })
+            formatted_data.append({
+                "Ticker": ticker,
+                "Peso (%)": f"{weight * 100:.3f}"
+            })
     if not formatted_data:
         return pd.DataFrame([{"Ticker": "Sin posición", "Peso (%)": ""}])
     return pd.DataFrame(formatted_data)
@@ -1171,7 +1032,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             elif s == "Sistema Descorrelación":
                 all_tickers_needed.update(strategy["main"])
                 all_tickers_needed.update(strategy["secondary"])
-            elif s == "HAA": # Manejo de la nueva estrategia
+            elif s == "HAA":
                 all_tickers_needed.update(strategy["offensive_universe"])
                 all_tickers_needed.update(strategy["canary"])
                 all_tickers_needed.update(strategy["cash_proxy_candidates"])
@@ -1181,21 +1042,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         all_tickers_needed.update(strategy[key])
         all_tickers_needed.add("SPY")
         tickers = list(all_tickers_needed)
-        # st.write(f"📊 Tickers a procesar: {tickers}") # Ocultar log
         extended_start = start_date - timedelta(days=365*3)
         extended_end = end_date + timedelta(days=30)
         extended_start_ts = pd.Timestamp(extended_start)
         extended_end_ts = pd.Timestamp(extended_end)
         raw = download_all_data(tickers, extended_start_ts, extended_end_ts)
         
-        # --- Mostrar estado de descarga ---
-        # Mostrar errores solo si realmente ocurrieron (y no fueron solo 403s suprimidos)
-        if _DOWNLOAD_ERRORS_OCCURRED: # <-- CAMBIO: Solo mostrar si hay errores reales
+        if _DOWNLOAD_ERRORS_OCCURRED:
             st.subheader("⚠️ Detalles de Errores en la Descarga o Procesamiento:")
-            # st.subheader("📊 Uso de API Keys de FMP") # Ocultar log
-            # for key, calls in FMP_CALLS.items(): # Ocultar log
-            #     percentage = (calls / FMP_LIMIT_PER_DAY) * 100 if FMP_LIMIT_PER_DAY > 0 else 0
-            #     st.write(f"Key {key[:10]}...: {calls}/{FMP_LIMIT_PER_DAY} llamadas ({percentage:.1f}%)") # Ocultar log
         else:
             st.success("✅ Datos extraídos y procesados correctamente")
         if not raw:
@@ -1205,23 +1059,17 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
         if df is None or df.empty:
             st.error("❌ No hay datos suficientes para el análisis.")
             st.stop()
-        # --- Calcular señales antes de filtrar ---
-        # Verificar que df tenga datos antes de continuar
-        if df is None or df.empty:
-            st.error("❌ No hay datos suficientes para calcular señales.")
-            st.stop()
         try:
             last_data_date = df.index.max()
         except (AttributeError, IndexError):
             st.error("❌ No se pudo determinar la fecha máxima de los datos.")
             st.stop()
-        # Obtener el último día del mes ANTERIOR al último dato disponible
         last_month_end_for_real_signal = (last_data_date.replace(day=1) - timedelta(days=1)).replace(day=1) + pd.offsets.MonthEnd(0)
         df_up_to_last_month_end = df[df.index <= last_month_end_for_real_signal]
         df_full = df
         signals_dict_last = {}
         signals_dict_current = {}
-        signals_log = {} # <-- CAMBIO: Diccionario para almacenar los logs completos
+        signals_log = {}
         for s in active:
             try:
                 if s == "DAA KELLER":
@@ -1278,7 +1126,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     sig_current = weights_sistema_descorrelacion(df_full,
                                                                  ALL_STRATEGIES[s]["main"],
                                                                  ALL_STRATEGIES[s]["secondary"])
-                elif s == "HAA": # Integración de la nueva estrategia
+                elif s == "HAA":
                     sig_last = weights_haa(df_up_to_last_month_end,
                                           ALL_STRATEGIES[s]["offensive_universe"],
                                           ALL_STRATEGIES[s]["canary"],
@@ -1289,15 +1137,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                            ALL_STRATEGIES[s]["cash_proxy_candidates"])
                 if sig_last and len(sig_last) > 0:
                     signals_dict_last[s] = sig_last[-1][1]
-                    # st.write(f"📝 Señal REAL para {s}: {sig_last[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
                 else:
                     signals_dict_last[s] = {}
                 if sig_current and len(sig_current) > 0:
                     signals_dict_current[s] = sig_current[-1][1]
-                    # st.write(f"📝 Señal HIPOTÉTICA para {s}: {sig_current[-1][0].strftime('%Y-%m-%d')}") # Ocultar log
                 else:
                     signals_dict_current[s] = {}
-                # <-- CAMBIO: Almacenar los logs completos
                 signals_log[s] = {
                     "real": sig_last,
                     "hypothetical": sig_current
@@ -1306,21 +1151,17 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.error(f"Error calculando señales para {s}: {e}")
                 signals_dict_last[s] = {}
                 signals_dict_current[s] = {}
-                signals_log[s] = {"real": [], "hypothetical": []} # <-- CAMBIO: Inicializar log vacío en caso de error
-        # Filtrar al rango de fechas del usuario
+                signals_log[s] = {"real": [], "hypothetical": []}
         start_date_ts = pd.Timestamp(start_date)
         end_date_ts = pd.Timestamp(end_date)
         df_filtered = df[(df.index >= start_date_ts) & (df.index <= end_date_ts)]
         if df_filtered.empty:
             st.error("❌ No hay datos en el rango de fechas seleccionado.")
             st.stop()
-        # --- cálculo de cartera combinada ---
         try:
-            # --- REFACTORIZACIÓN PARA CORRECTA ROTACIÓN ---
             if len(df_filtered) < 13:
                 st.error("❌ No hay suficientes datos en el rango filtrado.")
                 st.stop()
-            # 1. Calcular todas las señales para todo el período filtrado
             strategy_signals = {}
             for s in active:
                 if s == "DAA KELLER":
@@ -1354,19 +1195,16 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     strategy_signals[s] = weights_sistema_descorrelacion(df_filtered,
                                                                        ALL_STRATEGIES[s]["main"],
                                                                        ALL_STRATEGIES[s]["secondary"])
-                elif s == "HAA": # Integración de la nueva estrategia
+                elif s == "HAA":
                     strategy_signals[s] = weights_haa(df_filtered,
                                                      ALL_STRATEGIES[s]["offensive_universe"],
                                                      ALL_STRATEGIES[s]["canary"],
                                                      ALL_STRATEGIES[s]["cash_proxy_candidates"])
-            # 2. Preparar estructura para la cartera combinada
             rebalance_dates = [sig[0] for sig in strategy_signals[active[0]]] if active and strategy_signals.get(active[0]) else []
             if not rebalance_dates:
                  st.error("❌ No se pudieron calcular fechas de rebalanceo.")
                  st.stop()
-            # 3. Calcular retornos mensuales
             df_returns = df_filtered.pct_change().fillna(0)
-            # 4. Calcular curva de equity combinada
             portfolio_values = [initial_capital]
             portfolio_dates = [df_filtered.index[0]]
             for i in range(len(rebalance_dates)):
@@ -1400,13 +1238,11 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     portfolio_dates.append(date)
             comb_series_raw = pd.Series(portfolio_values, index=portfolio_dates)
             comb_series = comb_series_raw[~comb_series_raw.index.duplicated(keep='last')].sort_index()
-            # --- Crear SPY benchmark ---
             if "SPY" in df_filtered.columns:
                 spy_prices = df_filtered["SPY"]
                 if len(spy_prices) > 0 and spy_prices.iloc[0] > 0 and not pd.isna(spy_prices.iloc[0]):
                     spy_series = (spy_prices / spy_prices.iloc[0] * initial_capital)
-                    spy_series = spy_series.reindex(comb_series.index, method='pad')
-                    spy_series = spy_series.fillna(method='bfill')
+                    spy_series = spy_series.reindex(comb_series.index, method='pad').fillna(method='bfill')
                 else:
                     spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
             else:
@@ -1417,8 +1253,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     spy_filtered_for_benchmark = spy_full[(spy_full.index >= start_date_ts) & (spy_full.index <= end_date_ts)]
                     if len(spy_filtered_for_benchmark) > 0 and spy_filtered_for_benchmark.iloc[0] > 0 and not pd.isna(spy_filtered_for_benchmark.iloc[0]):
                         spy_series = (spy_filtered_for_benchmark / spy_filtered_for_benchmark.iloc[0] * initial_capital)
-                        spy_series = spy_series.reindex(comb_series.index, method='pad')
-                        spy_series = spy_series.fillna(method='bfill')
+                        spy_series = spy_series.reindex(comb_series.index, method='pad').fillna(method='bfill')
                     else:
                         spy_series = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                 else:
@@ -1431,7 +1266,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
             import traceback
             st.text(traceback.format_exc())
             st.stop()
-        # --- cálculo de series individuales ---
         ind_series = {}
         ind_metrics = {}
         for s in active:
@@ -1467,7 +1301,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                      sig_list = weights_sistema_descorrelacion(df_filtered,
                                                              ALL_STRATEGIES[s]["main"],
                                                              ALL_STRATEGIES[s]["secondary"])
-                 elif s == "HAA": # Integración de la nueva estrategia
+                 elif s == "HAA":
                      sig_list = weights_haa(df_filtered,
                                            ALL_STRATEGIES[s]["offensive_universe"],
                                            ALL_STRATEGIES[s]["canary"],
@@ -1477,7 +1311,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                  if not rebalance_dates_ind:
                       st.warning(f"No hay fechas de rebalanceo para {s}")
                       ind_series[s] = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
-                      ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
+                      ind_metrics[s] = {"CAGR": 0, "MaxDD": 0 , "Sharpe": 0, "Vol": 0}
                       continue
                  eq_values = [initial_capital]
                  eq_dates = [df_filtered.index[0]]
@@ -1505,378 +1339,155 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                 st.error(f"Error calculando serie para {s}: {e}")
                 ind_series[s] = pd.Series([initial_capital] * len(comb_series), index=comb_series.index)
                 ind_metrics[s] = {"CAGR": 0, "MaxDD": 0, "Sharpe": 0, "Vol": 0}
-        # ---------- MOSTRAR RESULTADOS ----------
-        try:
-            # <-- CAMBIO: Añadir pestaña para Logs de Señales
-            tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active] + ["📝 Logs de Señales"]
-            tabs = st.tabs(tab_names)
-            # ---- TAB 0: COMBINADA ----
-            with tabs[0]:
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("CAGR (Combinada)", f"{met_comb['CAGR']} %")
-                    st.metric("CAGR (SPY)", f"{met_spy['CAGR']} %")
-                with col2:
-                    st.metric("MaxDD (Combinada)", f"{met_comb['MaxDD']} %")
-                    st.metric("MaxDD (SPY)", f"{met_spy['MaxDD']} %")
-                st.metric("Sharpe (Combinada)", met_comb["Sharpe"])
-                st.metric("Sharpe (SPY)", met_spy["Sharpe"])
-                # Mostrar señales COMBINADAS
-                st.subheader("🎯 Señal Cartera Combinada")
-                st.write(f"📊 Datos disponibles: {df.index.min().strftime('%Y-%m-%d')} a {df.index.max().strftime('%Y-%m-%d')}")
-                st.write(f"🗓️ Señal REAL calculada con datos hasta: {last_month_end_for_real_signal.strftime('%Y-%m-%d')}")
-                combined_last = {}
-                combined_current = {}
-                for s in active:
-                    last_sig = signals_dict_last.get(s, {})
-                    current_sig = signals_dict_current.get(s, {})
-                    for t, w in last_sig.items():
-                        combined_last[t] = combined_last.get(t, 0) + w / len(active)
-                    for t, w in current_sig.items():
-                        combined_current[t] = combined_current.get(t, 0) + w / len(active)
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("**Última (Real):**")
-                    st.dataframe(format_signal_for_display(combined_last), use_container_width=True, hide_index=True)
-                with col2:
-                    st.write("**Actual (Hipotética):**")
-                    st.dataframe(format_signal_for_display(combined_current), use_container_width=True, hide_index=True)
-                # Gráficos
-                st.subheader("📈 Equity Curve")
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=comb_series.index, y=comb_series, name="Combinada", line=dict(color='blue', width=3)))
-                fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
-                fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
-                st.plotly_chart(fig, use_container_width=True)
-                # Drawdown
-                st.subheader("📉 Drawdown")
-                dd_comb = (comb_series/comb_series.cummax()-1)*100
-                dd_spy = (spy_series/spy_series.cummax()-1)*100
-                fig_dd = go.Figure()
-                fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada",
+        tab_names = ["📊 Cartera Combinada"] + [f"📈 {s}" for s in active] + ["📝 Logs de Señales"]
+        tabs = st.tabs(tab_names)
+        with tabs[0]:
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("CAGR (Combinada)", f"{met_comb['CAGR']} %")
+                st.metric("CAGR (SPY)", f"{met_spy['CAGR']} %")
+            with col2:
+                st.metric("MaxDD (Combinada)", f"{met_comb['MaxDD']} %")
+                st.metric("MaxDD (SPY)", f"{met_spy['MaxDD']} %")
+            st.metric("Sharpe (Combinada)", met_comb["Sharpe"])
+            st.metric("Sharpe (SPY)", met_spy["Sharpe"])
+            st.subheader("🎯 Señal Cartera Combinada")
+            st.write(f"📊 Datos disponibles: {df.index.min().strftime('%Y-%m-%d')} a {df.index.max().strftime('%Y-%m-%d')}")
+            st.write(f"🗓️ Señal REAL calculada con datos hasta: {last_month_end_for_real_signal.strftime('%Y-%m-%d')}")
+            combined_last = {}
+            combined_current = {}
+            for s in active:
+                last_sig = signals_dict_last.get(s, {})
+                current_sig = signals_dict_current.get(s, {})
+                for t, w in last_sig.items():
+                    combined_last[t] = combined_last.get(t, 0) + w / len(active)
+                for t, w in current_sig.items():
+                    combined_current[t] = combined_current.get(t, 0) + w / len(active)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**Última (Real):**")
+                st.dataframe(format_signal_for_display(combined_last), use_container_width=True, hide_index=True)
+            with col2:
+                st.write("**Actual (Hipotética):**")
+                st.dataframe(format_signal_for_display(combined_current), use_container_width=True, hide_index=True)
+            st.subheader("📈 Equity Curve")
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=comb_series.index, y=comb_series, name="Combinada", line=dict(color='blue', width=3)))
+            fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
+            fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
+            st.plotly_chart(fig, use_container_width=True)
+            st.subheader("📉 Drawdown")
+            dd_comb = (comb_series/comb_series.cummax()-1)*100
+            dd_spy = (spy_series/spy_series.cummax()-1)*100
+            fig_dd = go.Figure()
+            fig_dd.add_trace(go.Scatter(x=dd_comb.index, y=dd_comb, name="Combinada",
                                           line=dict(color='red', width=2),
-                                          fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
-                fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY",
+                                          fill='tonexty', fillcolor='rgba(255,0,0,0,0.1)'))
+            fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY",
                                           line=dict(color='orange', width=2, dash="dot"),
-                                          fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
-                fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
-                st.plotly_chart(fig_dd, use_container_width=True)
-                # Tabla de correlaciones
-                st.subheader("🔗 Correlaciones")
-                try:
-                    corr_data = {}
-                    corr_data["Cartera Combinada"] = comb_series.pct_change().dropna()
-                    corr_data["SPY"] = spy_series.pct_change().dropna()
-                    for s in active:
-                        if s in ind_series:
-                             corr_data[s] = ind_series[s].pct_change().dropna()
-                    aligned_data = pd.DataFrame()
-                    for name, series in corr_data.items():
-                        aligned_data[name] = series
-                    corr_matrix = aligned_data.corr()
-                    st.dataframe(corr_matrix.round(3), use_container_width=True)
-                except Exception as e:
-                    st.warning(f"No se pudieron calcular las correlaciones: {e}")
-                # ---- NUEVA: Tabla de retornos mensuales (Corregida) ----
-                st.subheader("📅 Retornos Mensuales por Año (con YTD)")
-                try:
-                    # Obtener retornos mensuales para la cartera combinada
-                    returns = comb_series.pct_change().dropna()
-                    if not returns.empty:
-                        # Asegurarse de que el índice sea de tipo datetime
-                        returns.index = pd.to_datetime(returns.index)
-
-                        # NO resamplear aquí, asumimos que los índices ya representan el período correcto (ej. fin de mes)
-                        # returns = returns.resample('ME').last() # <-- ELIMINADO
-
-                        # Crear un DataFrame con los retornos y una columna auxiliar para el año y mes
-                        returns_df = pd.DataFrame({'Return': returns, 'Year': returns.index.year, 'Month': returns.index.month})
-
-                        # Pivotar para tener años como filas y meses como columnas
-                        pivot_table = returns_df.pivot(index='Year', columns='Month', values='Return')
-
-                        # Rellenar NaNs con cadenas vacías para la visualización
-                        pivot_table = pivot_table.fillna("")
-
-                        # Renombrar columnas a nombres de meses o números con ceros (01, 02, ...)
-                        # month_names = {1: 'Ene', 2: 'Feb', ..., 12: 'Dic'} # Opcional
-                        month_names = {i: f"{i:02d}" for i in range(1, 13)}
-                        pivot_table.rename(columns=month_names, inplace=True)
-
-                        # Resetear índice para que 'Year' sea una columna
-                        df_table = pivot_table.reset_index()
-
-                        # Reordenar columnas: Año, 01, 02, ..., 12, YTD
-                        columns_order = ['Year'] + [f"{i:02d}" for i in range(1, 13)]
-                        # Asegurarse de que todas las columnas esperadas estén presentes
-                        for col in columns_order:
-                            if col not in df_table.columns:
-                                df_table[col] = "" # Añadir columna vacía si falta
-                        # Calcular YTD para cada año
-                        equity_for_ytd = comb_series
-                        if equity_for_ytd is not None and not equity_for_ytd.empty:
-                            equity_for_ytd.index = pd.to_datetime(equity_for_ytd.index)
-                            annual_summary = equity_for_ytd.groupby(equity_for_ytd.index.year).agg(
-                                start_value=('first'), # Valor al inicio del año
-                                end_value=('last')     # Valor al final del año
-                            )
-                            # Calcular el retorno YTD anual
-                            annual_summary['YTD_Return'] = (annual_summary['end_value'] / annual_summary['start_value']) - 1
-                            # Formatear como porcentaje (multiplicando por 100)
-                            annual_summary['YTD_Return_Pct'] = annual_summary['YTD_Return'].apply(lambda x: f"{x*100:+.2f}%" if pd.notna(x) and x != float('inf') and x != float('-inf') else "")
-                            # Añadir YTD al df_table
-                            ytd_series = annual_summary['YTD_Return_Pct']
-                            df_table = df_table.merge(ytd_series, left_on='Year', right_index=True, how='left')
-                            df_table.rename(columns={'YTD_Return_Pct': 'YTD'}, inplace=True)
-                            # Asegurar que la columna YTD esté al final
-                            columns_order_with_ytd = columns_order + ['YTD']
-                            df_table = df_table[columns_order_with_ytd]
-                        else:
-                             # Si no hay datos de equity, añadir columna YTD vacía
-                             df_table['YTD'] = ""
-
-                        # Aplicar estilos condicionales
-                        def color_cells(val):
-                            if val == "":
-                                return 'background-color: white; color: black;'
-                            try:
-                                # Convertir el valor a float para comparación
-                                # Asumimos que el valor ya es un float o puede convertirse (si no fue rellenado con "")
-                                if isinstance(val, str):
-                                     # Si es string, intentar extraer el número (aunque pct_change da floats)
-                                     # Este bloque maneja el caso donde val es un string con %, pero pct_change da floats
-                                     # Por lo tanto, este bloque probablemente no se ejecute si pct_change da floats
-                                     # Pero lo dejamos por si acaso se formatea como string en algún punto.
-                                     num_str = val.replace('%', '').replace('+', '')
-                                     if num_str.startswith('-'):
-                                         sign = -1
-                                         num_str = num_str[1:]
-                                     else:
-                                         sign = 1
-                                     num = sign * float(num_str)
-                                else:
-                                     # CORRECCIÓN: Multiplicar por 100 para que el valor decimal se interprete como porcentaje
-                                     num = float(val) * 100 # pct_change devuelve floats, los multiplicamos por 100 para comparar
-
-                                if num > 0:
-                                    # Verde claro para positivo
-                                    return f'background-color: rgba(144, 238, 144, 0.5); color: black;'
-                                elif num < 0:
-                                    # Rojo claro para negativo
-                                    return f'background-color: rgba(255, 182, 193, 0.5); color: black;'
-                                else:
-                                    # Blanco para cero
-                                    return 'background-color: white; color: black;'
-                            except (ValueError, TypeError):
-                                # En caso de error de conversión, celda normal
-                                return 'background-color: white; color: black;'
-                            except Exception:
-                                return 'background-color: white; color: black;'
-                            except Exception:
-                                return 'background-color: white; color: black;'
-
-                        # Aplicar estilos
-                        styled_table = df_table.style.applymap(color_cells)
-                        st.dataframe(styled_table, use_container_width=True)
-
-                    else:
-                        st.info("No hay datos de retornos para mostrar.")
-                except Exception as e:
-                    st.warning(f"No se pudo generar la tabla de retornos mensuales para Cartera Combinada: {e}")
-                    # Opcional: Mostrar el traceback completo para depuración
-                    # import traceback
-                    # st.text(traceback.format_exc())
-            # ---- TABS INDIVIDUALES ----
-            for idx, s in enumerate(active, start=1):
-                try:
-                    with tabs[idx]:
-                        st.header(s)
-                        if s in ind_series and s in ind_metrics:
-                            ser = ind_series[s]
-                            met = ind_metrics[s]
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.metric("CAGR", f"{met['CAGR']} %")
-                                st.metric("MaxDD", f"{met['MaxDD']} %")
-                            with col2:
-                                st.metric("Sharpe", met["Sharpe"])
-                                st.metric("Vol", f"{met['Vol']} %")
-                            # Mostrar señales individuales
-                            st.subheader("🎯 Señales")
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.write("**Última (Real):**")
-                                st.dataframe(format_signal_for_display(signals_dict_last.get(s, {})), use_container_width=True, hide_index=True)
-                            with col2:
-                                st.write("**Actual (Hipotética):**")
-                                st.dataframe(format_signal_for_display(signals_dict_current.get(s, {})), use_container_width=True, hide_index=True)
-                            # Gráficos individuales
-                            st.subheader("📈 Equity Curve")
-                            fig = go.Figure()
-                            fig.add_trace(go.Scatter(x=ser.index, y=ser, name=s, line=dict(color='green', width=3)))
-                            fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
-                            fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
-                            st.plotly_chart(fig, use_container_width=True)
-                            # Drawdown individuales
-                            st.subheader("📉 Drawdown")
-                            dd_ind = (ser/ser.cummax()-1)*100
-                            fig_dd = go.Figure()
-                            fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s,
-                                                      line=dict(color='red', width=2),
-                                                      fill='tonexty', fillcolor='rgba(255,0,0,0.1)'))
-                            fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY",
-                                                      line=dict(color='orange', width=2, dash="dot"),
-                                                      fill='tonexty', fillcolor='rgba(255,165,0,0.1)'))
-                            fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
-                            st.plotly_chart(fig_dd, use_container_width=True)
-                            
-                            # ---- NUEVA: Tabla de retornos mensuales (Corregida) ----
-                            st.subheader("📅 Retornos Mensuales por Año (con YTD)")
-                            try:
-                                # Obtener retornos mensuales para la cartera/estrategia
-                                returns = None
-                                if s in ind_series:
-                                     returns = ind_series[s].pct_change().dropna()
-
-                                if returns is not None and not returns.empty:
-                                    # Asegurarse de que el índice sea de tipo datetime
-                                    returns.index = pd.to_datetime(returns.index)
-
-                                    # NO resamplear aquí, asumimos que los índices ya representan el período correcto (ej. fin de mes)
-                                    # returns = returns.resample('ME').last() # <-- ELIMINADO
-
-                                    # Crear un DataFrame con los retornos y una columna auxiliar para el año y mes
-                                    returns_df = pd.DataFrame({'Return': returns, 'Year': returns.index.year, 'Month': returns.index.month})
-
-                                    # Pivotar para tener años como filas y meses como columnas
-                                    pivot_table = returns_df.pivot(index='Year', columns='Month', values='Return')
-
-                                    # Rellenar NaNs con cadenas vacías para la visualización
-                                    pivot_table = pivot_table.fillna("")
-
-                                    # Renombrar columnas a nombres de meses o números con ceros (01, 02, ...)
-                                    # month_names = {1: 'Ene', 2: 'Feb', ..., 12: 'Dic'} # Opcional
-                                    month_names = {i: f"{i:02d}" for i in range(1, 13)}
-                                    pivot_table.rename(columns=month_names, inplace=True)
-
-                                    # Resetear índice para que 'Year' sea una columna
-                                    df_table = pivot_table.reset_index()
-
-                                    # Reordenar columnas: Año, 01, 02, ..., 12, YTD
-                                    columns_order = ['Year'] + [f"{i:02d}" for i in range(1, 13)]
-                                    # Asegurarse de que todas las columnas esperadas estén presentes
-                                    for col in columns_order:
-                                        if col not in df_table.columns:
-                                            df_table[col] = "" # Añadir columna vacía si falta
-                                    # Calcular YTD para cada año
-                                    equity_for_ytd = ind_series[s]
-                                    if equity_for_ytd is not None and not equity_for_ytd.empty:
-                                        equity_for_ytd.index = pd.to_datetime(equity_for_ytd.index)
-                                        annual_summary = equity_for_ytd.groupby(equity_for_ytd.index.year).agg(
-                                            start_value=('first'), # Valor al inicio del año
-                                            end_value=('last')     # Valor al final del año
-                                        )
-                                        # Calcular el retorno YTD anual
-                                        annual_summary['YTD_Return'] = (annual_summary['end_value'] / annual_summary['start_value']) - 1
-                                        # Formatear como porcentaje (multiplicando por 100)
-                                        annual_summary['YTD_Return_Pct'] = annual_summary['YTD_Return'].apply(lambda x: f"{x*100:+.2f}%" if pd.notna(x) and x != float('inf') and x != float('-inf') else "")
-                                        # Añadir YTD al df_table
-                                        ytd_series = annual_summary['YTD_Return_Pct']
-                                        df_table = df_table.merge(ytd_series, left_on='Year', right_index=True, how='left')
-                                        df_table.rename(columns={'YTD_Return_Pct': 'YTD'}, inplace=True)
-                                        # Asegurar que la columna YTD esté al final
-                                        columns_order_with_ytd = columns_order + ['YTD']
-                                        df_table = df_table[columns_order_with_ytd]
-                                    else:
-                                         # Si no hay datos de equity, añadir columna YTD vacía
-                                         df_table['YTD'] = ""
-
-                                    # Aplicar estilos condicionales (misma función que antes)
-                                    def color_cells(val):
-                                        if val == "":
-                                            return 'background-color: white; color: black;'
-                                        try:
-                                            # Convertir el valor a float para comparación
-                                            # Asumimos que el valor ya es un float o puede convertirse (si no fue rellenado con "")
-                                            if isinstance(val, str):
-                                                 # Si es string, intentar extraer el número (aunque pct_change da floats)
-                                                 # Este bloque maneja el caso donde val es un string con %, pero pct_change da floats
-                                                 # Por lo tanto, este bloque probablemente no se ejecute si pct_change da floats
-                                                 # Pero lo dejamos por si acaso se formatea como string en algún punto.
-                                                 num_str = val.replace('%', '').replace('+', '')
-                                                 if num_str.startswith('-'):
-                                                     sign = -1
-                                                     num_str = num_str[1:]
-                                                 else:
-                                                     sign = 1
-                                                 num = sign * float(num_str)
-                                            else:
-                                                 # CORRECCIÓN: Multiplicar por 100 para que el valor decimal se interprete como porcentaje
-                                                 num = float(val) * 100 # pct_change devuelve floats, los multiplicamos por 100 para comparar
-
-                                            if num > 0:
-                                                # Verde claro para positivo
-                                                return f'background-color: rgba(144, 238, 144, 0.5); color: black;'
-                                            elif num < 0:
-                                                # Rojo claro para negativo
-                                                return f'background-color: rgba(255, 182, 193, 0.5); color: black;'
-                                            else:
-                                                # Blanco para cero
-                                                return 'background-color: white; color: black;'
-                                        except (ValueError, TypeError):
-                                            # En caso de error de conversión, celda normal
-                                            return 'background-color: white; color: black;'
-                                        except Exception:
-                                            return 'background-color: white; color: black;'
-                                        except Exception:
-                                            return 'background-color: white; color: black;'
-                                        except Exception:
-                                            return 'background-color: white; color: black;'
-
-                                    # Aplicar estilos
-                                    styled_table = df_table.style.applymap(color_cells)
-                                    st.dataframe(styled_table, use_container_width=True)
-
-                                else:
-                                    st.info("No hay datos de retornos para mostrar.")
-                            except Exception as e:
-                                st.warning(f"No se pudo generar la tabla de retornos mensuales para {s}: {e}")
-                                # Opcional: Mostrar el traceback completo para depuración
-                                # import traceback
-                                # st.text(traceback.format_exc())
-                        else:
-                            st.write("No hay datos disponibles para esta estrategia.")
-                except Exception as e:
-                    st.error(f"❌ Error en pestaña {s}: {e}")
-            
-            # <-- CAMBIO: Nueva pestaña para Logs de Señales
-            # ---- TAB FINAL: LOGS DE SEÑALES ----
-            with tabs[-1]: # Acceder a la última pestaña
-                st.header("📝 Logs de Señales Históricas")
-                st.write("Este apartado muestra el historial completo de señales reales.")
-                
+                                          fill='tonexty', fillcolor='rgba(255,165,0,0,0.1)'))
+            fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
+            st.plotly_chart(fig_dd, use_container_width=True)
+            st.subheader("🔗 Correlaciones")
+            try:
+                corr_data = {}
+                corr_data["Cartera Combinada"] = comb_series.pct_change().dropna()
+                corr_data["SPY"] = spy_series.pct_change().dropna()
                 for s in active:
-                    st.subheader(f"Señales Reales para: {s}")
-                    
-                    # Señales Reales (Históricas completas)
-                    real_signals = signals_log.get(s, {}).get("real", [])
-                    if real_signals:
-                        real_df_data = []
-                        for date, weights in real_signals:
-                            if weights: # Solo mostrar si hay pesos
-                                weights_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in weights.items()])
-                                real_df_data.append({"Fecha": date.strftime('%Y-%m-%d'), "Pesos": weights_str})
-                        if real_df_data: # <-- CORRECCIÓN: verificar real_df_data en lugar de real_df_
-                            real_df = pd.DataFrame(real_df_data)
-                            st.dataframe(real_df, use_container_width=True, hide_index=True)
-                        else:
-                            st.info("No hay señales reales con posición para esta estrategia.")
+                    if s in ind_series:
+                         corr_data[s] = ind_series[s].pct_change().dropna()
+                aligned_data = pd.DataFrame()
+                for name, series in corr_data.items():
+                    aligned_data[name] = series
+                corr_matrix = aligned_data.corr()
+                st.dataframe(corr_matrix.round(3), use_container_width=True)
+            except Exception as e:
+                st.warning(f"No se pudieron calcular las correlaciones: {e}")
+            st.subheader("📅 Retornos Mensuales por Año (con YTD)")
+            try:
+                returns = comb_series.pct_change().dropna()
+                if not returns.empty:
+                    returns.index = pd.to_datetime(returns.index)
+                    monthly_table = build_monthly_returns_table(returns)
+                    styled_table = monthly_table.style.applymap(color_cells)
+                    st.dataframe(styled_table, use_container_width=True)
+                else:
+                    st.info("No hay datos de retornos para mostrar.")
+            except Exception as e:
+                st.warning(f"No se pudo generar la tabla de retornos mensuales para Cartera Combinada: {e}")
+        for idx, s in enumerate(active, start=1):
+            try:
+                with tabs[idx]:
+                    st.header(s)
+                    if s in ind_series and s in ind_metrics:
+                        ser = ind_series[s]
+                        met = ind_metrics[s]
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.metric("CAGR", f"{met['CAGR']} %")
+                            st.metric("MaxDD", f"{met['MaxDD']} %")
+                        with col2:
+                            st.metric("Sharpe", met["Sharpe"])
+                            st.metric("Vol", f"{met['Vol']} %")
+                        st.subheader("🎯 Señales")
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write("**Última (Real):**")
+                            st.dataframe(format_signal_for_display(signals_dict_last.get(s, {})), use_container_width=True, hide_index=True)
+                        with col2:
+                            st.write("**Actual (Hipotética):**")
+                            st.dataframe(format_signal_for_display(signals_dict_current.get(s, {})), use_container_width=True, hide_index=True)
+                        st.subheader("📈 Equity Curve")
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=ser.index, y=ser, name=s, line=dict(color='green', width=3)))
+                        fig.add_trace(go.Scatter(x=spy_series.index, y=spy_series, name="SPY", line=dict(color='orange', dash="dash", width=2)))
+                        fig.update_layout(height=400, title="Equity Curve", yaxis_title="Valor ($)")
+                        st.plotly_chart(fig, use_container_width=True)
+                        st.subheader("📉 Drawdown")
+                        dd_ind = (ser/ser.cummax()-1)*100
+                        fig_dd = go.Figure()
+                        fig_dd.add_trace(go.Scatter(x=dd_ind.index, y=dd_ind, name=s,
+                                                      line=dict(color='red', width=2),
+                                                      fill='tonexty', fillcolor='rgba(255,0,0,0,0.1)'))
+                        fig_dd.add_trace(go.Scatter(x=dd_spy.index, y=dd_spy, name="SPY",
+                                                      line=dict(color='orange', width=2, dash="dot"),
+                                                      fill='tonexty', fillcolor='rgba(255,165,0,0,0.1)'))
+                        fig_dd.update_layout(height=300, yaxis_title="Drawdown (%)", title="Drawdown")
+                        st.plotly_chart(fig_dd, use_container_width=True)
+                        st.subheader("📅 Retornos Mensuales por Año (con YTD)")
+                        try:
+                            returns = None
+                            if s in ind_series:
+                                 returns = ind_series[s].pct_change().dropna()
+                            if returns is not None and not returns.empty:
+                                returns.index = pd.to_datetime(returns.index)
+                                monthly_table = build_monthly_returns_table(returns)
+                                st.dataframe(monthly_table.style.applymap(color_cells), use_container_width=True)
+                            else:
+                                st.info("No hay datos de retornos para mostrar.")
+                        except Exception as e:
+                            st.warning(f"No se pudo generar la tabla de retornos mensuales para {s}: {e}")
                     else:
-                        st.info("No hay señales reales registradas para esta estrategia.")
-
-                    st.divider() # Línea divisoria entre estrategias
-
-        except Exception as e:
-            st.error(f"❌ Error mostrando resultados combinados: {e}")
+                        st.write("No hay datos disponibles para esta estrategia.")
+            except Exception as e:
+                st.error(f"❌ Error en pestaña {s}: {e}")
+        with tabs[-1]:
+            st.header("📝 Logs de Señales Históricas")
+            st.write("Este apartado muestra el historial completo de señales reales.")
+            for s in active:
+                st.subheader(f"Señales Reales para: {s}")
+                real_signals = signals_log.get(s, {}).get("real", [])
+                if real_signals:
+                    real_df_data = []
+                    for date, weights in real_signals:
+                        if weights:
+                            weights_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in weights.items()])
+                            real_df_data.append({"Fecha": date.strftime('%Y-%m-%d'), "Pesos": weights_str})
+                    if real_df_data:
+                        real_df = pd.DataFrame(real_df_data)
+                        st.dataframe(real_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No hay señales reales con posición para esta estrategia.")
+                st.divider()
 else:
     st.info("👈 Configura y ejecuta")
