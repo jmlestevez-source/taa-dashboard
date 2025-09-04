@@ -1774,7 +1774,8 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                     # Generar encabezados de meses (01, 02, ..., 12) + YTD
                                     month_columns = [f"{i:02d}" for i in range(1, 13)] + ["YTD"]
                                                             # ... (código anterior hasta el bucle for year in all_years:) ...
-                            for year in all_years:
+                                                    # ... (código anterior hasta el bucle for year in all_years:) ...
+                        for year in all_years:
                             # Inicializar la fila con el año
                             row = [year]
                             # Obtener los datos de retornos para este año (esto es una Serie)
@@ -1804,6 +1805,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             row.append(formatted_ytd)
                             
                             table_data.append(row)
+                        # ... (resto del código: crear DataFrame, aplicar estilos, etc.) ...
                         # ... (resto del código: crear DataFrame, aplicar estilos, etc.) ...
                                     # Crear DataFrame para la tabla
                                     columns = ['Year'] + month_columns
