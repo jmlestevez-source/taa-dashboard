@@ -1655,7 +1655,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                          sign = 1
                                      num = sign * float(num_str)
                                 else:
-                                     # MODIFICACIÓN: Multiplicar por 100 para que el valor decimal se interprete como porcentaje
                                      num = float(val) * 100 # pct_change devuelve floats, los multiplicamos por 100 para comparar
 
                                 if num > 0:
@@ -1809,7 +1808,6 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                                      sign = 1
                                                  num = sign * float(num_str)
                                             else:
-                                                 # MODIFICACIÓN: Multiplicar por 100 para que el valor decimal se interprete como porcentaje
                                                  num = float(val) * 100 # pct_change devuelve floats, los multiplicamos por 100 para comparar
 
                                             if num > 0:
@@ -1862,12 +1860,12 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             if weights: # Solo mostrar si hay pesos
                                 weights_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in weights.items()])
                                 real_df_data.append({"Fecha": date.strftime('%Y-%m-%d'), "Pesos": weights_str})
-                            if real_df_data: # <-- CORRECCIÓN: Agregar ':' y usar el nombre de variable correcto
+                        if real_df_data:
                             real_df = pd.DataFrame(real_df_data)
                             st.dataframe(real_df, use_container_width=True, hide_index=True)
-                        else: # <-- CORRECCIÓN: Agregar ':'
+                        else:
                             st.info("No hay señales reales con posición para esta estrategia.")
-                    else
+                    else:
                         st.info("No hay señales reales registradas para esta estrategia.")
 
                     st.divider() # Línea divisoria entre estrategias
