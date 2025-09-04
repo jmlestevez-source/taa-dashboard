@@ -1577,115 +1577,113 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     st.dataframe(corr_matrix.round(3), use_container_width=True)
                 except Exception as e:
                     st.warning(f"No se pudieron calcular las correlaciones: {e}")
-                        # ---- NUEVA: Tabla de retornos mensuales (Corregida) ----
-                        # (Este bloque va DENTRO del bucle 'for idx, s in enumerate(active, start=1):' y del bloque 'try:')
-                        st.subheader("📅 Retornos Mensuales por Año (con YTD)")
-                        try:
-                            # Obtener retornos mensuales para esta estrategia
-                            returns = None
-                            if s in ind_series:
-                                # Usar la serie de equity para calcular retornos
-                                returns = ind_series[s].pct_change().dropna()
+                                    # ---- NUEVA: Tabla de retornos mensuales (Corregida) ----
+            st.subheader("📅 Retornos Mensuales por Año (con YTD)")
+            try:
+                # Obtener retornos mensuales para la cartera combinada
+                # Asegurarse de usar la serie de equity para cálculos precisos de YTD
+                returns = comb_series.pct_change().dropna() 
+                if not returns.empty:
+                    # Asegurarse de que el índice sea de tipo datetime
+                    returns.index = pd.to_datetime(returns.index)
 
-                            if returns is not None and not returns.empty:
-                                # Asegurarse de que el índice sea de tipo datetime
-                                returns.index = pd.to_datetime(returns.index)
+                    # Crear un DataFrame con los retornos y columnas auxiliares para agrupación
+                    returns_df = pd.DataFrame({
+                        'Return': returns, 
+                        'Year': returns.index.year, 
+                        'Month': returns.index.month
+                    })
 
-                                # Crear DataFrame intermedio para agrupar por año/mes
-                                returns_df = pd.DataFrame({
-                                    'Return': returns,
-                                    'Year': returns.index.year,
-                                    'Month': returns.index.month
-                                })
+                    # Agrupar retornos por año
+                    yearly_groups = returns_df.groupby('Year')
 
-                                # Pivotar para tener años como filas y meses como columnas
-                                pivot_table = returns_df.pivot(index='Year', columns='Month', values='Return')
+                    # --- CORRECCIÓN PRINCIPAL ---
+                    # Formatear para tabla usando la iteración correcta sobre Series
+                    table_data = []
+                    all_years = sorted(yearly_groups.groups.keys())
+                    
+                    # Generar encabezados de meses (01, 02, ..., 12) + YTD
+                    month_columns = [f"{i:02d}" for i in range(1, 13)]
+                    
+                    for year in all_years:
+                        # Inicializar la fila con el año
+                        row = [year]
+                        
+                        # Obtener los datos de retornos para este año (esto es una Serie de 'Return')
+                        year_data_series = yearly_groups.get_group(year)['Return']
 
-                                # Rellenar NaNs con cadenas vacías
-                                pivot_table = pivot_table.fillna("")
+                        # Crear un diccionario {mes: retorno} para acceso rápido
+                        # year_data_series.index son las fechas, year_data_series.values son los retornos
+                        monthly_returns_for_year = {date.month: ret for date, ret in year_data_series.items()}
 
-                                # Renombrar columnas a números con ceros (01, 02, ...)
-                                month_names = {i: f"{i:02d}" for i in range(1, 13)}
-                                pivot_table.rename(columns=month_names, inplace=True)
-
-                                # Resetear índice para que 'Year' sea una columna
-                                df_table = pivot_table.reset_index()
-
-                                # --- CORRECCIÓN PRINCIPAL: Formatear valores mensuales como porcentaje ---
-                                month_columns = [f"{i:02d}" for i in range(1, 13)]
-                                for col in month_columns:
-                                    if col in df_table.columns:
-                                        df_table[col] = df_table[col].apply(
-                                            lambda x: f"{x * 100:+.2f}%" if isinstance(x, (int, float)) and not pd.isna(x) else ""
-                                        )
-
-                                # Reordenar columnas: Año, 01, 02, ..., 12, YTD
-                                columns_order = ['Year'] + month_columns
-                                for col in columns_order:
-                                    if col not in df_table.columns:
-                                        df_table[col] = "" # Añadir columna vacía si falta
-
-                                # Calcular YTD para cada año usando la serie de equity original
-                                equity_for_ytd = ind_series[s]
-                                if equity_for_ytd is not None and not equity_for_ytd.empty:
-                                    equity_for_ytd.index = pd.to_datetime(equity_for_ytd.index)
-                                    annual_summary = equity_for_ytd.groupby(equity_for_ytd.index.year).agg(
-                                        start_value=('first'),
-                                        end_value=('last')
-                                    )
-                                    annual_summary['YTD_Return'] = (annual_summary['end_value'] / annual_summary['start_value']) - 1
-                                    annual_summary['YTD_Return_Pct'] = annual_summary['YTD_Return'].apply(
-                                        lambda x: f"{x * 100:+.2f}%" if pd.notna(x) and x != float('inf') and x != float('-inf') else ""
-                                    )
-
-                                    # Añadir YTD al df_table
-                                    ytd_series = annual_summary['YTD_Return_Pct']
-                                    df_table = df_table.merge(ytd_series, left_on='Year', right_index=True, how='left')
-                                    df_table.rename(columns={'YTD_Return_Pct': 'YTD'}, inplace=True)
-
-                                    # Asegurar que la columna YTD esté al final
-                                    columns_order_with_ytd = columns_order + ['YTD']
-                                    df_table = df_table[columns_order_with_ytd]
-                                else:
-                                    df_table['YTD'] = ""
-
-                                # Función para aplicar colores condicionales
-                                # Ahora recibe strings formateados como "+1.45%" o ""
-                                def color_cells(val):
-                                    if val == "":
-                                        return 'background-color: white; color: black;'
-                                    try:
-                                        # Extraer el número del string de porcentaje
-                                        num_str = val.replace('%', '').replace('+', '')
-                                        if num_str.startswith('-'):
-                                            sign = -1
-                                            num_str = num_str[1:]
-                                        else:
-                                            sign = 1
-                                        num = sign * float(num_str)
-                                        if num > 0:
-                                            return f'background-color: rgba(144, 238, 144, 0.5); color: black;' # Verde claro
-                                        elif num < 0:
-                                            return f'background-color: rgba(255, 182, 193, 0.5); color: black;' # Rojo claro
-                                        else:
-                                            return 'background-color: white; color: black;'
-                                    except (ValueError, TypeError):
-                                        return 'background-color: white; color: black;'
-                                    except Exception:
-                                        return 'background-color: white; color: black;'
-
-                                # Aplicar estilos y mostrar
-                                styled_table = df_table.style.applymap(color_cells)
-                                st.dataframe(styled_table, use_container_width=True)
-
+                        # Iterar sobre cada mes (1 a 12) para formatear valores mensuales
+                        for month in range(1, 13):
+                            if month in monthly_returns_for_year:
+                                value = monthly_returns_for_year[month]
+                                # CORRECCIÓN: Multiplicar por 100 y formatear como porcentaje con signo
+                                formatted_value = f"{value * 100:+.2f}%"
+                                row.append(formatted_value)
                             else:
-                                st.info("No hay datos de retornos para mostrar.")
-                        except Exception as e:
-                            st.warning(f"No se pudo generar la tabla de retornos mensuales para {s}: {e}")
-                            # Opcional: print(traceback.format_exc())
-                            # Opcional: Mostrar el traceback completo para depuración
-                            # import traceback
-                            # st.text(traceback.format_exc())
+                                # Si no hay dato para ese mes, dejar celda vacía
+                                row.append("")
+
+                        # Calcular YTD para el año actual basado en la serie de equity original
+                        # Se usa la serie de equity (comb_series) para el cálculo más preciso
+                        equity_year_slice = comb_series.loc[comb_series.index.year == year]
+                        if len(equity_year_slice) > 1: # Necesitamos al menos dos puntos para calcular retorno
+                             ytd_return = (equity_year_slice.iloc[-1] / equity_year_slice.iloc[0]) - 1
+                             formatted_ytd = f"{ytd_return * 100:+.2f}%"
+                        else:
+                             formatted_ytd = "0.00%" # O manejar como "N/A" si se prefiere
+                        row.append(formatted_ytd)
+                        
+                        table_data.append(row)
+
+                    # Crear DataFrame para la tabla
+                    columns = ['Year'] + month_columns + ['YTD']
+                    df_table = pd.DataFrame(table_data, columns=columns)
+
+                    # Aplicar estilos condicionales
+                    def color_cells(val):
+                        # La función recibe strings formateados como "+1.45%" o ""
+                        if val == "":
+                            return 'background-color: white; color: black;'
+                        try:
+                            # Extraer el número del string de porcentaje
+                            num_str = val.replace('%', '').replace('+', '')
+                            if num_str.startswith('-'):
+                                sign = -1
+                                num_str = num_str[1:]
+                            else:
+                                sign = 1
+                            num = sign * float(num_str)
+                            if num > 0:
+                                # Verde claro para positivo
+                                return f'background-color: rgba(144, 238, 144, 0.5); color: black;'
+                            elif num < 0:
+                                # Rojo claro para negativo
+                                return f'background-color: rgba(255, 182, 193, 0.5); color: black;'
+                            else:
+                                # Blanco para cero
+                                return 'background-color: white; color: black;'
+                        except (ValueError, TypeError):
+                            # En caso de error de conversión, celda normal
+                            return 'background-color: white; color: black;'
+                        except Exception:
+                            return 'background-color: white; color: black;'
+
+                    # Aplicar estilos y mostrar
+                    styled_table = df_table.style.applymap(color_cells)
+                    st.dataframe(styled_table, use_container_width=True)
+
+                else:
+                    st.info("No hay datos de retornos para mostrar.")
+            except Exception as e:
+                st.warning(f"No se pudo generar la tabla de retornos mensuales para Cartera Combinada: {e}")
+                # Opcional: Mostrar el traceback completo para depuración
+                import traceback
+                st.text(traceback.format_exc())
+                         
                     else:
                         st.write("No hay datos disponibles para esta estrategia.")
             except Exception as e:
