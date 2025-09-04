@@ -1640,24 +1640,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             if val == "":
                                 return 'background-color: white; color: black;'
                             try:
-                                # Convertir el valor a float para comparación
-                                # Asumimos que el valor ya es un float o puede convertirse (si no fue rellenado con "")
-                                if isinstance(val, str):
-                                     # Si es string, intentar extraer el número (aunque pct_change da floats)
-                                     # Este bloque maneja el caso donde val es un string con %, pero pct_change da floats
-                                     # Por lo tanto, este bloque probablemente no se ejecute si pct_change da floats
-                                     # Pero lo dejamos por si acaso se formatea como string en algún punto.
-                                     num_str = val.replace('%', '').replace('+', '')
-                                     if num_str.startswith('-'):
-                                         sign = -1
-                                         num_str = num_str[1:]
-                                     else:
-                                         sign = 1
-                                     num = sign * float(num_str)
+                                # Extraer el número de la cadena de texto (ya viene como "1.45%")
+                                num_str = val.replace('%', '').replace('+', '')
+                                if num_str.startswith('-'):
+                                    sign = -1
+                                    num_str = num_str[1:]
                                 else:
-                                     # MODIFICACIÓN: Multiplicar por 100 para que el valor decimal se interprete como porcentaje
-                                     num = float(val) * 100 # pct_change devuelve floats, los multiplicamos por 100 para comparar
-
+                                    sign = 1
+                                num = sign * float(num_str)
                                 if num > 0:
                                     # Verde claro para positivo
                                     return f'background-color: rgba(144, 238, 144, 0.5); color: black;'
@@ -1794,24 +1784,14 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                         if val == "":
                                             return 'background-color: white; color: black;'
                                         try:
-                                            # Convertir el valor a float para comparación
-                                            # Asumimos que el valor ya es un float o puede convertirse (si no fue rellenado con "")
-                                            if isinstance(val, str):
-                                                 # Si es string, intentar extraer el número (aunque pct_change da floats)
-                                                 # Este bloque maneja el caso donde val es un string con %, pero pct_change da floats
-                                                 # Por lo tanto, este bloque probablemente no se ejecute si pct_change da floats
-                                                 # Pero lo dejamos por si acaso se formatea como string en algún punto.
-                                                 num_str = val.replace('%', '').replace('+', '')
-                                                 if num_str.startswith('-'):
-                                                     sign = -1
-                                                     num_str = num_str[1:]
-                                                 else:
-                                                     sign = 1
-                                                 num = sign * float(num_str)
+                                            # Extraer el número de la cadena de texto (ya viene como "1.45%")
+                                            num_str = val.replace('%', '').replace('+', '')
+                                            if num_str.startswith('-'):
+                                                sign = -1
+                                                num_str = num_str[1:]
                                             else:
-                                                 # MODIFICACIÓN: Multiplicar por 100 para que el valor decimal se interprete como porcentaje
-                                                 num = float(val) * 100 # pct_change devuelve floats, los multiplicamos por 100 para comparar
-
+                                                sign = 1
+                                            num = sign * float(num_str)
                                             if num > 0:
                                                 # Verde claro para positivo
                                                 return f'background-color: rgba(144, 238, 144, 0.5); color: black;'
