@@ -1773,32 +1773,38 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                     all_years = sorted(yearly_groups.groups.keys())
                                     # Generar encabezados de meses (01, 02, ..., 12) + YTD
                                     month_columns = [f"{i:02d}" for i in range(1, 13)] + ["YTD"]
-                                    for year in all_years:
-                                        # Inicializar la fila con el año
-                                        row = [year]
-                                        # Obtener los datos de retornos para este año
-                                        year_data = yearly_groups.get_group(year)
-                                        # Crear un diccionario para acceder rápidamente a los retornos por mes
-                                        # Usamos el número del mes (1-12) como clave
-                                        monthly_returns_for_year = {row_index.month: row_data['Return'] for row_index, row_data in year_data.iterrows()}
-                                        # Iterar sobre cada mes (1 a 12)
-                                        for month in range(1, 13):
-                                            if month in monthly_returns_for_year:
-                                                value = monthly_returns_for_year[month]
-                                                # FORMATEAR CORRECTAMENTE AQUÍ <--- CORRECCIÓN APLICADA
-                                                # Multiplicar por 100 y formatear como porcentaje
-                                                formatted_value = f"{value * 100:+.2f}%"
-                                                row.append(formatted_value)
-                                            else:
-                                                # Si no hay dato para ese mes, dejar celda vacía
-                                                row.append("")
-                                        # Calcular YTD para el año actual
-                                        # Solo calculamos YTD si el año es completo o es el año actual
-                                        # Para simplificar, calculamos YTD basado en los retornos mensuales disponibles para ese año
-                                        ytd_return = (1 + year_data['Return']).prod() - 1
-                                        formatted_ytd = f"{ytd_return * 100:+.2f}%"
-                                        row.append(formatted_ytd)
-                                        table_data.append(row)
+                                                            # ... (código anterior hasta el bucle for year in all_years:) ...
+                        for year in all_years:
+                            # Inicializar la fila con el año
+                            row = [year]
+                            # Obtener los datos de retornos para este año (esto es una Serie)
+                            year_data = yearly_groups.get_group(year) # year_data es una Serie
+
+                            # Crear un diccionario para acceder rápidamente a los retornos por mes
+                            # year_data.index contiene las fechas, y year_data.values contiene los retornos
+                            # Usamos el número del mes (obtenido de la fecha) como clave y el valor del retorno como valor
+                            monthly_returns_for_year = {date.month: value for date, value in year_data.items()}
+
+                            # Iterar sobre cada mes (1 a 12)
+                            for month in range(1, 13):
+                                if month in monthly_returns_for_year:
+                                    value_decimal = monthly_returns_for_year[month] # Obtener el valor decimal del retorno
+                                    # CORRECCIÓN: Multiplicar por 100 y formatear como porcentaje
+                                    formatted_value = f"{value_decimal * 100:+.2f}%"
+                                    row.append(formatted_value)
+                                else:
+                                    # Si no hay dato para ese mes, dejar celda vacía
+                                    row.append("")
+                            
+                            # Calcular YTD para el año actual basado en los retornos mensuales disponibles
+                            # year_data es una Serie de retornos (decimales) para el año 'year'
+                            # (1 + retornos).prod() - 1 es la fórmula para el retorno total del período
+                            ytd_return_decimal = (1 + year_data).prod() - 1 
+                            formatted_ytd = f"{ytd_return_decimal * 100:+.2f}%" # Formatear YTD como porcentaje
+                            row.append(formatted_ytd)
+                            
+                            table_data.append(row)
+                        # ... (resto del código: crear DataFrame, aplicar estilos, etc.) ...
                                     # Crear DataFrame para la tabla
                                     columns = ['Year'] + month_columns
                                     df_table = pd.DataFrame(table_data, columns=columns)
