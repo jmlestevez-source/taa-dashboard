@@ -1774,7 +1774,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                     # Generar encabezados de meses (01, 02, ..., 12) + YTD
                                     month_columns = [f"{i:02d}" for i in range(1, 13)] + ["YTD"]
                                                             # ... (código anterior hasta el bucle for year in all_years:) ...
-                        for year in all_years:
+                            for year in all_years:
                             # Inicializar la fila con el año
                             row = [year]
                             # Obtener los datos de retornos para este año (esto es una Serie)
