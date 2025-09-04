@@ -1577,7 +1577,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                     st.dataframe(corr_matrix.round(3), use_container_width=True)
                 except Exception as e:
                     st.warning(f"No se pudieron calcular las correlaciones: {e}")
-                                                # ---- NUEVA: Tabla de retornos mensuales (Corregida) ----
+                        # ---- NUEVA: Tabla de retornos mensuales (Corregida) ----
                         # (Este bloque va DENTRO del bucle 'for idx, s in enumerate(active, start=1):' y del bloque 'try:')
                         st.subheader("📅 Retornos Mensuales por Año (con YTD)")
                         try:
