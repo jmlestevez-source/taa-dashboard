@@ -73,8 +73,8 @@ HAA = {
 }
 # Nueva estrategia: Retorno y Correlación
 RET_Y_CORR = {
-    "universe": ['QQQ', 'SPY', 'VNQ', 'IYR', 'IEF', 'TLT', 'TIP', 'IEV',
-                 'EWJ', 'EFA', 'EEM', 'DBC', 'GLD'],
+    "universe": ["QQQ", "SPY", "VNQ", "BIL", "IEF", "TLT", "TIP", "IEV",
+          "EWJ", "EFA", "EEM", "DBC", "GLD", "IWM"],
     "top_n": 6,            # Top N por rendimiento
     "low_corr_n": 3        # N ETFs menos correlacionados
 }
@@ -1786,7 +1786,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                         # Formatear retornos mensuales como porcentaje
                         month_cols = [f"{i:02d}" for i in range(1, 13)]
                         for col in month_cols:
-                            df_table[col] = df_table[col].apply(lambda x: f"{x*100:.3f}%" if isinstance(x, (float, int)) else x)
+                            df_table[col] = df_table[col].apply(lambda x: f"{x*100:.2f}%" if isinstance(x, (float, int)) else x)
                         # Calcular YTD para cada año
                         equity_for_ytd = comb_series
                         if equity_for_ytd is not None and not equity_for_ytd.empty:
@@ -1798,7 +1798,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             # Calcular el retorno YTD anual
                             annual_summary['YTD_Return'] = (annual_summary['end_value'] / annual_summary['start_value']) - 1
                             # Formatear como porcentaje
-                            annual_summary['YTD_Return_Pct'] = annual_summary['YTD_Return'].apply(lambda x: f"{x*100:.3f}%" if pd.notna(x) and x != float('inf') and x != float('-inf') else "")
+                            annual_summary['YTD_Return_Pct'] = annual_summary['YTD_Return'].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) and x != float('inf') and x != float('-inf') else "")
                             # Añadir YTD al df_table
                             ytd_series = annual_summary['YTD_Return_Pct']
                             df_table = df_table.merge(ytd_series, left_on='Year', right_index=True, how='left')
@@ -1945,7 +1945,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                     month_cols = [f"{i:02d}" for i in range(1, 13)]
                                     for col in month_cols:
                                         if col in df_table.columns:
-                                            df_table[col] = df_table[col].apply(lambda x: f"{x*100:.3f}%" if isinstance(x, (float, int)) else x)
+                                            df_table[col] = df_table[col].apply(lambda x: f"{x*100:.2f}%" if isinstance(x, (float, int)) else x)
                                     # Calcular YTD para cada año
                                     equity_for_ytd = ind_series[s]
                                     if equity_for_ytd is not None and not equity_for_ytd.empty:
@@ -1957,7 +1957,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                                         # Calcular el retorno YTD anual
                                         annual_summary['YTD_Return'] = (annual_summary['end_value'] / annual_summary['start_value']) - 1
                                         # Formatear como porcentaje
-                                        annual_summary['YTD_Return_Pct'] = annual_summary['YTD_Return'].apply(lambda x: f"{x*100:.3f}%" if pd.notna(x) and x != float('inf') and x != float('-inf') else "")
+                                        annual_summary['YTD_Return_Pct'] = annual_summary['YTD_Return'].apply(lambda x: f"{x*100:.2f}%" if pd.notna(x) and x != float('inf') and x != float('-inf') else "")
                                         # Añadir YTD al df_table
                                         ytd_series = annual_summary['YTD_Return_Pct']
                                         df_table = df_table.merge(ytd_series, left_on='Year', right_index=True, how='left')
