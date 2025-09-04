@@ -1866,8 +1866,7 @@ if st.sidebar.button("🚀 Ejecutar", type="primary"):
                             if weights: # Solo mostrar si hay pesos
                                 weights_str = ", ".join([f"{k}: {v*100:.1f}%" for k, v in weights.items()])
                                 real_df_data.append({"Fecha": date.strftime('%Y-%m-%d'), "Pesos": weights_str})
-                        # CORRECCIÓN DEL ERROR DE SINTAXIS: if real_df_ -> if real_df_data:
-                        if real_df_data: 
+                        if real_df_data: # <-- CORRECCIÓN: verificar real_df_data en lugar de real_df_
                             real_df = pd.DataFrame(real_df_data)
                             st.dataframe(real_df, use_container_width=True, hide_index=True)
                         else:
